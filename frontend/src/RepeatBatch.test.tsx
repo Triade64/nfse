@@ -1,0 +1,9 @@
+// @vitest-environment jsdom
+import React from 'react';
+import {afterEach,it,expect,vi} from 'vitest';
+import {render,screen,cleanup,fireEvent,waitFor} from '@testing-library/react';
+import {RepeatBatch} from './RepeatBatch';
+afterEach(cleanup);
+const source={id:1,name:'Janeiro',revision:3,status:'Simulado',rows:[{id:10,raw:{nome_tomador:'CLIENTE A',cnpj_emitente:'11222333000181',descricao_servico:'Serviço A',valor_servico:'100.00'}},{id:11,raw:{nome_tomador:'CLIENTE B',cnpj_emitente:'11222333000181',descricao_servico:'Serviço B',valor_servico:'200.00'}}]};
+it('repete clientes selecionados em nova competencia com revisao explicita',async()=>{const api=vi.fn(async(_p:string,_m?:string,_d?:any)=>source);const created=vi.fn(async()=>{});render(<RepeatBatch batches={[source]} api={api} onCreated={created} disabled={false}/>);fireEvent.change(screen.getByLabelText('Lote que servirá de base'),{target:{value:'1'}});await screen.findByText('CLIENTE A');fireEvent.change(screen.getByLabelText('Nova competência'),{target:{value:'2026-02-10'}});fireEvent.click(screen.getByLabelText('Incluir CLIENTE B'));const btn=screen.getByRole('button',{name:/Gerar 1 rascunhos/});expect((btn as HTMLButtonElement).disabled).toBe(true);fireEvent.click(screen.getByLabelText(/Conferi que serviço/));expect((btn as HTMLButtonElement).disabled).toBe(false);fireEvent.click(btn);await waitFor(()=>expect(created).toHaveBeenCalledTimes(1));expect(api.mock.calls[1][0]).toBe('/batches/1/repeat');expect(api.mock.calls[1][2]).toMatchObject({draft_ids:[10],competencia:'2026-02-10',keep_taxes:true,confirm_tax_review:true,source_revision:3})});
+it('não abre outro lote quando a grade tem alterações pendentes',()=>{render(<RepeatBatch batches={[source]} api={vi.fn()} onCreated={vi.fn()} disabled/>);expect((screen.getByLabelText('Lote que servirá de base') as HTMLSelectElement).disabled).toBe(true)});

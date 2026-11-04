@@ -1,0 +1,15 @@
+.git
+.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/*.db
+**/*.pem
+**/*.pfx
+**/*.p12
+.env*
+backend/tests
+frontend/src/*.test.tsx
+docs
+examples
+supabase

@@ -1,0 +1,6 @@
+[project]
+name = "triade-nfse-cloud"
+version = "0.5.0"
+requires-python = ">=3.12,<3.13"
+[tool.vercel]
+entrypoint = "index:app"

@@ -1,0 +1,2 @@
+﻿cnpj_emitente;documento_tomador;nome_tomador;competencia;municipio_ibge;descricao_servico;codigo_tributacao_nacional;codigo_tributacao_municipal;valor_servico;iss_aliquota;iss_retido;retencoes;observacoes
+11222333000181;52998224725;TOMADOR FICTÍCIO - SEM VALIDADE FISCAL;2026-01-10;4205704;SERVIÇO FICTÍCIO PARA TESTE LOCAL;010101;;150,00;2,00;nao;{};Cadastre antes EMPRESA FICTÍCIA DE TESTES com CNPJ sintético 11222333000181. Não usar para emissão.

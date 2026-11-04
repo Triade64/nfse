@@ -1,0 +1,17 @@
+.venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+data/
+public/
+frontend/dist/
+.vercel/
+*.db
+*.pem
+*.pfx
+*.p12

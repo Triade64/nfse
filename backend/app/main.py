@@ -597,7 +597,7 @@ def backup(u=Depends(current_user),db=Depends(db_session)):
     return StreamingResponse(buffer,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="backup_nfse.zip"'})
 
 DIST=ROOT/'frontend'/'dist'
-if DIST.exists() and not CLOUD:
+if DIST.exists():
     app.mount('/assets',StaticFiles(directory=DIST/'assets'),name='assets')
     @app.get('/')
     def index():return FileResponse(DIST/'index.html')

@@ -19,7 +19,7 @@ Guarde o arquivo com acesso restrito. Configure backups do PostgreSQL conforme o
 
 ## 2. Projeto Vercel
 
-Importe `Triade64/nfse`, usando a raiz do repositório. A configuração `vercel.json` compila o frontend e o copia para `public/`; a API é `index.py` / FastAPI, Python 3.12. Confira no plano Vercel se o uso pelo escritório é permitido antes de publicar: não presuma elegibilidade comercial no plano Hobby.
+Importe `Triade64/nfse`, usando a raiz do repositório. A configuração `vercel.json` compila o frontend; nesta versão a API também serve a interface de `frontend/dist/`. A cópia para `public/` é gerada, mas a validação do deployment confirmou a entrega pelo FastAPI. A API é `index.py` / FastAPI, Python 3.12. Confira no plano Vercel se o uso pelo escritório é permitido antes de publicar: não presuma elegibilidade comercial no plano Hobby.
 
 Cadastre as variáveis como variáveis do servidor, nunca com prefixo `VITE_`:
 

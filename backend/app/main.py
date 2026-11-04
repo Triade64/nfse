@@ -12,7 +12,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, Response
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict
@@ -163,6 +163,23 @@ class Credentials(BaseModel):
 
 class SetupInput(Credentials):
     setup_token:str|None=Field(default=None,max_length=512)
+
+@app.post('/api/integrations/restricted/diagnostic')
+async def restricted_diagnostic(file:UploadFile=File(...),password:str=Form(...),consent:bool=Form(False),check_connection:bool=Form(False),u=Depends(current_user),db=Depends(db_session)):
+    role(u,['admin'])
+    if not consent:raise HTTPException(422,'Confirme o envio temporário do A1 e da senha para este diagnóstico.')
+    from .restricted_diagnostic import diagnose,DiagnosticError,MAX_PFX
+    from starlette.concurrency import run_in_threadpool
+    try:
+        data=await file.read(MAX_PFX+1)
+        if len(data)>MAX_PFX:raise HTTPException(413,'Arquivo maior que 256 KB.')
+        result=await run_in_threadpool(diagnose,data,password,check_connection)
+    except DiagnosticError as error:
+        raise HTTPException(422,str(error)) from None
+    finally:await file.close()
+    audit(db,u,'restricted_diagnostic','user',u.id,{'connection_requested':check_connection,'http_status':result['connection']['http_status']})
+    db.commit()
+    return result
 
 @app.get('/api/setup')
 def setup_status(db=Depends(db_session)):

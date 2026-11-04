@@ -404,6 +404,32 @@ async def import_file(file:UploadFile=File(...),u=Depends(current_user),db=Depen
         raise HTTPException(422,message)
     return make_batch(db,u,Path(name).name[:200],rows)
 
+@app.delete('/api/drafts/{id}')
+def delete_draft(id:int,revision:int,u=Depends(current_user),db=Depends(db_session)):
+    role(u,['admin','operator','approver'])
+    if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+    batch_id=db.scalar(select(Draft.batch_id).where(Draft.id==id))
+    if batch_id is None:raise HTTPException(404,'Rascunho não encontrado')
+    b=get_or_404(db,Batch,batch_id,locked=True);batch_access(db,u,b)
+    if b.revision!=revision:raise HTTPException(409,'Lote alterado. Reabra a versão atual antes de excluir.')
+    editable=['Rascunho','Aguardando validação','Com inconsistência','Validado','Aguardando aprovação','Aprovado']
+    if b.status not in editable:raise HTTPException(409,'Lote enviado ou processado não pode ter rascunhos excluídos.')
+    if db.scalar(select(Job.id).join(Draft,Job.draft_id==Draft.id).where(Draft.batch_id==b.id)):
+        raise HTTPException(409,'Lote já enviado à fila; a exclusão está bloqueada.')
+    from .models import DPS
+    if db.scalar(select(DPS.id).join(Draft,DPS.draft_id==Draft.id).where(Draft.batch_id==b.id)):
+        raise HTTPException(409,'Há documento fiscal vinculado; a exclusão está bloqueada.')
+    d=get_or_404(db,Draft,id)
+    if d.status not in editable:raise HTTPException(409,'Documento enviado ou processado não pode ser excluído.')
+    audit(db,u,'delete_draft','draft',d.id,{'batch_id':b.id,'line':d.line,'previous_status':d.status})
+    db.delete(d);db.flush()
+    if db.scalar(select(Draft.id).where(Draft.batch_id==b.id).limit(1)):
+        validate_batch(db,u,b)
+    else:
+        b.status='Rascunho';b.revision+=1;b.approval_digest=None;b.approved_by=None
+    db.commit()
+    return {'ok':True,'batch_id':b.id,'revision':b.revision}
+
 @app.get('/api/batches')
 def batches(u=Depends(current_user),db=Depends(db_session)):
     q=select(Batch).order_by(Batch.id.desc())

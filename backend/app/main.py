@@ -651,7 +651,7 @@ if not CLOUD:
 @app.get('/api/health')
 def health():
     import os
-    return {'app_id':'triade-nfse','version':(ROOT/'VERSION').read_text().strip(),'instance':'cloud' if CLOUD else os.getenv('NFSE_INSTANCE','portable')}
+    return {'app_id':'triade-nfse','version':(ROOT/'VERSION').read_text().strip(),'instance':'cloud' if CLOUD else os.getenv('NFSE_INSTANCE','portable'),'local_connector_available':all((ROOT/'local_connector'/name).is_file() for name in ['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','LEIA-ME.txt'])}
 
 @app.post('/api/batches/{id}/process-simulation')
 def process_simulation(id:int,u=Depends(current_user),db=Depends(db_session)):

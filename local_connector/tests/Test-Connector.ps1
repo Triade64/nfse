@@ -8,7 +8,7 @@ foreach($name in @('ConectorTriade.ps1','TriadeConnector.Core.psm1')) {
     if ($errors.Count -ne 0) { throw ('Falha no parser PowerShell: '+$name) }
 }
 Import-Module (Join-Path $root 'TriadeConnector.Core.psm1') -Force
-$key=[Security.Cryptography.RSA]::Create();$key.KeySize=2048
+$key=[Security.Cryptography.RSACng]::new(2048)
 $cert=$null;$expired=$null;$public=$null;$imported=$null;$handler=$null;$password=$null
 $directory=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
 $null=New-Item -ItemType Directory -Path $directory

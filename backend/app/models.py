@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, ForeignKey, Integer, JSON, UniqueConstraint, Text, BigInteger
+from sqlalchemy import String, ForeignKey, Integer, JSON, UniqueConstraint, Text, BigInteger, Index, text
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
+
+DISCARDED = 'Descartada'
+ACTIVE_DPS = "status IS NULL OR status <> 'Descartada'"
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -85,9 +88,11 @@ class DpsSeries(Base):
     revision: Mapped[int] = mapped_column(default=1)
 class DPS(Base):
     __tablename__ = 'dps'
-    __table_args__ = (UniqueConstraint('company_id', 'environment', 'series', 'number', name='uq_dps_number'),)
+    # A draft may keep discarded reservations, but only one active (non-discarded) DPS. Numbers are never reused.
+    __table_args__ = (UniqueConstraint('company_id', 'environment', 'series', 'number', name='uq_dps_number'),
+                      Index('uq_dps_active_draft', 'draft_id', unique=True, sqlite_where=text(ACTIVE_DPS), postgresql_where=text(ACTIVE_DPS)))
     id: Mapped[int] = mapped_column(primary_key=True)
-    draft_id: Mapped[int] = mapped_column(ForeignKey('drafts.id'), unique=True)
+    draft_id: Mapped[int] = mapped_column(ForeignKey('drafts.id'))
     environment: Mapped[str] = mapped_column(String(20))
     identifier: Mapped[str] = mapped_column(String(80), unique=True)
     xml_path: Mapped[str | None] = mapped_column(nullable=True)
@@ -101,6 +106,10 @@ class DPS(Base):
     xml: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=now)
     created_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
+    # Columns added in 0.6.1: discarding keeps the row and its number; it only releases the draft.
+    discarded_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    discarded_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
+    discard_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 class NFSe(Base):
     __tablename__ = 'nfse'
     id: Mapped[int] = mapped_column(primary_key=True)

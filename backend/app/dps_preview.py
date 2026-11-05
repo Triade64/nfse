@@ -62,6 +62,10 @@ class ReserveOptions(FiscalChoices):
     confirm_reserve: Literal[True]
     confirm_scope: Literal[True]
 
+class FiscalProfile(FiscalChoices):
+    """Per-company fiscal choices, reviewed once by an administrator and reused on every emission."""
+    series: str = Field(pattern=SERIES_PATTERN)
+
 def check_instant(issued_at: datetime):
     if issued_at.utcoffset() is None:
         raise ValueError('Data de emissão exige fuso horário.')

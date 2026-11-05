@@ -41,3 +41,12 @@ O site **não assina nem envia**: o XML baixado segue para o conector 0.8.4 (ass
 Há também um teste de frontend do modo de reserva.
 
 O teste `test_backup_integrity_and_no_credentials_in_audit` já falhava no Windows antes desta versão, porque o SQLite temporário fica bloqueado. Não tem relação com a numeração.
+
+## Atualização 0.6.1: descartar reserva
+
+Motivo: na primeira reserva real, o site reservou série 1 nº 1, o mesmo ID de um teste antigo do conector (rejeitado com E0008, E0120 e E0625). O conector bloqueou corretamente o envio como revisão inválida. Como a reserva vale por rascunho, o rascunho ficava preso ao nº 1.
+
+- `POST /api/dps/{id}/discard` (administrador): exige um motivo e a confirmação explícita de que a DPS **não foi autorizada**. Só aceita DPS na situação `Reservada`. A linha, o XML e o número são preservados, e o número nunca é reutilizado. O rascunho fica livre para reservar o próximo número.
+- Banco: a unicidade por rascunho passa a valer somente para DPS ativas (índice parcial `uq_dps_active_draft`). Migração aditiva: `database/migrations/0002_descartar_reserva.sql`, a aplicar depois da 0001.
+- Interface (Configurações → DPS reservadas): lista, download do XML e descarte.
+- Limite: o site ainda não recebe os resultados do conector. Por isso, a confirmação de que a DPS não foi autorizada é responsabilidade do operador. Descartar uma DPS autorizada permitiria emitir a mesma nota duas vezes.

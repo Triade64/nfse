@@ -126,8 +126,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.customers (
 	name VARCHAR(200) NOT NULL, 
 	details JSON NOT NULL, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
-	UNIQUE (company_id, document)
+	UNIQUE (company_id, document), 
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
 )
 
 ;
@@ -295,13 +295,16 @@ CREATE TABLE IF NOT EXISTS nfse_app.dps (
 	xml TEXT, 
 	created_at VARCHAR(40), 
 	created_by INTEGER, 
+	discarded_at VARCHAR(40), 
+	discarded_by INTEGER, 
+	discard_reason VARCHAR(500), 
 	PRIMARY KEY (id), 
-	UNIQUE (draft_id), 
 	UNIQUE (identifier), 
-	FOREIGN KEY(draft_id) REFERENCES nfse_app.drafts (id), 
-	CONSTRAINT uq_dps_number UNIQUE (company_id, environment, series, number), 
 	FOREIGN KEY(created_by) REFERENCES nfse_app.users (id), 
-	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
+	FOREIGN KEY(draft_id) REFERENCES nfse_app.drafts (id), 
+	FOREIGN KEY(discarded_by) REFERENCES nfse_app.users (id), 
+	CONSTRAINT uq_dps_number UNIQUE (company_id, environment, series, number)
 )
 
 ;
@@ -321,6 +324,8 @@ CREATE INDEX IF NOT EXISTS idx_dps_draft_id ON nfse_app.dps (draft_id);
 CREATE INDEX IF NOT EXISTS idx_dps_company_id ON nfse_app.dps (company_id);
 
 CREATE INDEX IF NOT EXISTS idx_dps_created_by ON nfse_app.dps (created_by);
+
+CREATE INDEX IF NOT EXISTS idx_dps_discarded_by ON nfse_app.dps (discarded_by);
 
 
 CREATE TABLE IF NOT EXISTS nfse_app.jobs (
@@ -380,5 +385,7 @@ CREATE INDEX IF NOT EXISTS idx_nfse_dps_id ON nfse_app.nfse (dps_id);
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA nfse_app TO nfse_runtime;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_repeat_request ON nfse_app.audit (user_id, (info->>'request_id')) WHERE action='repeat_batch';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dps_active_draft ON nfse_app.dps (draft_id) WHERE status IS NULL OR status <> 'Descartada';
 
 COMMIT;

@@ -1,0 +1,119 @@
+import React, {useEffect, useMemo, useState, type FormEvent} from 'react';
+import {Copy, Plus, Pencil, Send, Download, Trash2, Search, RefreshCw, X} from 'lucide-react';
+
+type Data=Record<string,any>;
+type Api=(path:string,method?:string,data?:any)=>Promise<any>;
+export type Note={id:number;batch_id:number;batch_revision:number;company_id:number|null;raw:Record<string,string>;errors:string[];amount_cents:number;situation:string;dps:Data|null;editable:boolean};
+
+const money=(c:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((c||0)/100);
+const dateBR=(iso:string)=>iso?iso.split('-').reverse().join('/'):'—';
+const tone=(s:string)=>s==='Pronta'?'green':s==='Com inconsistência'?'red':s.startsWith('DPS')?'blue':'orange';
+const blank=():Record<string,string>=>({cnpj_emitente:'',documento_tomador:'',nome_tomador:'',competencia:'',municipio_ibge:'',descricao_servico:'',codigo_tributacao_nacional:'',codigo_tributacao_municipal:'',valor_servico:'',iss_aliquota:'',iss_retido:'nao',retencoes:'{}',observacoes:''});
+const SITUATIONS=['Pronta','Com inconsistência','Rascunho','DPS reservada'];
+
+function Dialog({title,close,children}:{title:string;close:()=>void;children:React.ReactNode}){
+ return <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button className="icon" onClick={close} aria-label="Fechar"><X size={20}/></button></header>{children}</section></div>;
+}
+
+export function Notas({api,companies,customers,services,role}:{api:Api;companies:Data[];customers:Data[];services:Data[];role:string}){
+ const [notes,setNotes]=useState<Note[]>([]),[loaded,setLoaded]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [query,setQuery]=useState(''),[company,setCompany]=useState(''),[situation,setSituation]=useState(''),[month,setMonth]=useState('');
+ const [checked,setChecked]=useState<number[]>([]);
+ const [dup,setDup]=useState<Note[]|null>(null),[dupDate,setDupDate]=useState(''),[dupOk,setDupOk]=useState(false),[requestId,setRequestId]=useState(()=>crypto.randomUUID());
+ const [emitting,setEmitting]=useState<Note|null>(null),[emitOk,setEmitOk]=useState(false);
+ const [discarding,setDiscarding]=useState<Note|null>(null),[reason,setReason]=useState(''),[discardOk,setDiscardOk]=useState(false);
+ const [editing,setEditing]=useState<{note?:Note;raw:Record<string,string>}|null>(null);
+ const canEdit=['admin','operator','approver'].includes(role),isAdmin=role==='admin';
+ const companyOf=(id:number|null|undefined)=>companies.find(c=>c.id===id);
+
+ async function run(fn:()=>Promise<void>){setBusy(true);setError('');try{await fn()}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
+ async function load(){setNotes(await api('/notes'));setLoaded(true)}
+ useEffect(()=>{run(load)},[]);
+
+ const visible=useMemo(()=>notes.filter(n=>(!company||String(n.company_id)===company)&&(!situation||n.situation===situation)&&(!month||n.raw.competencia?.startsWith(month))&&(!query||(n.raw.nome_tomador+' '+n.raw.documento_tomador+' '+n.raw.descricao_servico).toLowerCase().includes(query.toLowerCase()))),[notes,company,situation,month,query]);
+ const selected=notes.filter(n=>checked.includes(n.id));
+
+ function openDuplicate(list:Note[]){setDup(list);setDupDate('');setDupOk(false);setRequestId(crypto.randomUUID());setNotice('')}
+ async function submitDuplicate(e:FormEvent){e.preventDefault();if(!dup)return;await run(async()=>{const r=await api('/notes/duplicate','POST',{draft_ids:dup.map(n=>n.id),competencia:dupDate,confirm_review:dupOk,request_id:requestId});setDup(null);setChecked([]);await load();setNotice(`${r.created.length} nota${r.created.length>1?'s':''} criada${r.created.length>1?'s':''} para ${dateBR(dupDate)}. Confira e emita.`)})}
+ async function submitEmit(e:FormEvent){e.preventDefault();if(!emitting)return;await run(async()=>{const r=await api('/notes/'+emitting.id+'/emit','POST',{batch_revision:emitting.batch_revision,expected_raw:emitting.raw,confirm:emitOk});const a=document.createElement('a');a.href='/api/dps/'+r.id+'/xml';a.download=r.identifier+'.xml';a.click();setEmitting(null);await load();setNotice(`${r.existing?'Esta nota já tinha DPS: ':'DPS reservada: '}série ${r.series}, nº ${r.number}. O XML foi baixado — assine e envie pelo conector.`)})}
+ async function submitDiscard(e:FormEvent){e.preventDefault();if(!discarding?.dps)return;await run(async()=>{const r=await api('/dps/'+discarding.dps!.id+'/discard','POST',{reason,confirm_not_authorized:discardOk});setDiscarding(null);await load();setNotice(`DPS série ${r.series} nº ${r.number} descartada. A nota pode ser emitida com um novo número.`)})}
+ async function submitEdit(e:FormEvent){e.preventDefault();if(!editing)return;await run(async()=>{
+  if(editing.note)await api('/drafts/'+editing.note.id,'PUT',{raw:editing.raw,revision:editing.note.batch_revision});
+  else await api('/batches','POST',{name:(editing.raw.nome_tomador||'Nota')+' · '+editing.raw.competencia,rows:[editing.raw]});
+  setEditing(null);await load();setNotice('Nota salva e validada.')})}
+
+ function field(key:string,value:string){setEditing(ed=>ed&&({...ed,raw:{...ed.raw,[key]:value}}))}
+ function chooseCompany(id:string){const c=companies.find(c=>String(c.id)===id);setEditing(ed=>ed&&({...ed,raw:{...ed.raw,cnpj_emitente:c?.cnpj||'',municipio_ibge:ed.raw.municipio_ibge||c?.config.municipio_ibge||'',documento_tomador:'',nome_tomador:''}}))}
+ const editCompany=editing?companies.find(c=>c.cnpj===editing.raw.cnpj_emitente):undefined;
+ let taxes:Data={};try{taxes=JSON.parse(editing?.raw.retencoes||'{}')||{}}catch{taxes={}}
+
+ return <section className="card notes">
+  <div className="sectionHead"><div><h2>Notas</h2><p>Todas as notas em um só lugar. Duplique as do mês anterior, confira e emita.</p></div>
+   <div className="buttonRow">{canEdit&&checked.length>0&&<button onClick={()=>openDuplicate(selected)}><Copy size={16}/> Duplicar {checked.length} selecionada{checked.length>1?'s':''}</button>}{canEdit&&<button className="primary" onClick={()=>setEditing({raw:{...blank(),cnpj_emitente:companies.length===1?companies[0].cnpj:'',municipio_ibge:companies.length===1?companies[0].config.municipio_ibge||'':''}})}><Plus size={16}/> Nova nota</button>}</div></div>
+  <div className="toolbar filters"><Search size={18}/><input aria-label="Buscar notas" placeholder="Tomador, documento ou serviço" value={query} onChange={e=>setQuery(e.target.value)}/>
+   <select aria-label="Filtrar empresa" value={company} onChange={e=>setCompany(e.target.value)}><option value="">Todas as empresas</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+   <select aria-label="Filtrar situação" value={situation} onChange={e=>setSituation(e.target.value)}><option value="">Todas as situações</option>{SITUATIONS.map(s=><option key={s}>{s}</option>)}</select>
+   <label className="inlineLabel">Competência<input aria-label="Filtrar competência" type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label>
+   <button aria-label="Atualizar lista" disabled={busy} onClick={()=>run(load)}><RefreshCw size={16}/></button></div>
+  {notice&&<div className="success" role="status">{notice}</div>}{error&&!dup&&!emitting&&!discarding&&!editing&&<div className="error" role="alert">{error}</div>}
+  {loaded&&<div className="resultsTotal">{visible.length} nota{visible.length!==1?'s':''} <strong>{money(visible.reduce((s,n)=>s+n.amount_cents,0))}</strong></div>}
+  <div className="tableWrap"><table><thead><tr><th><input type="checkbox" aria-label="Selecionar todas as notas visíveis" checked={visible.length>0&&visible.every(n=>checked.includes(n.id))} onChange={e=>setChecked(e.target.checked?visible.map(n=>n.id):[])}/></th><th>Tomador / serviço</th><th>Empresa</th><th>Competência</th><th>Valor</th><th>Situação</th><th>Ações</th></tr></thead>
+  <tbody>{visible.map(n=><tr key={n.id}>
+   <td><input type="checkbox" aria-label={'Selecionar '+n.raw.nome_tomador} checked={checked.includes(n.id)} onChange={e=>setChecked(prev=>e.target.checked?[...prev,n.id]:prev.filter(id=>id!==n.id))}/></td>
+   <td><strong>{n.raw.nome_tomador||'Tomador não informado'}</strong><small>{n.raw.descricao_servico}</small></td>
+   <td>{companyOf(n.company_id)?.name||n.raw.cnpj_emitente}</td><td>{dateBR(n.raw.competencia)}</td><td>{money(n.amount_cents)}</td>
+   <td><span className={'badge '+tone(n.situation)}>{n.situation}</span>{n.dps&&<small>Série {n.dps.series} · nº {n.dps.number}</small>}{n.errors.map(s=><small className="rowError" key={s}>{s}</small>)}</td>
+   <td><div className="entryActions">
+    {canEdit&&n.editable&&<button className="textBtn" onClick={()=>{setEditing({note:n,raw:{...blank(),...n.raw}});setNotice('')}}><Pencil size={15}/> Editar</button>}
+    {canEdit&&<button className="textBtn" onClick={()=>openDuplicate([n])}><Copy size={15}/> Duplicar</button>}
+    {isAdmin&&n.situation==='Pronta'&&<button className="textBtn" onClick={()=>{setEmitting(n);setEmitOk(false);setNotice('')}}><Send size={15}/> Emitir</button>}
+    {n.dps&&<a className="textBtn" href={'/api/dps/'+n.dps.id+'/xml'} download={n.dps.identifier+'.xml'}><Download size={15}/> XML</a>}
+    {isAdmin&&n.dps?.status==='Reservada'&&<button className="textBtn" onClick={()=>{setDiscarding(n);setReason('');setDiscardOk(false);setNotice('')}}><Trash2 size={15}/> Descartar</button>}
+   </div></td></tr>)}</tbody></table></div>
+  {!loaded&&!error&&<p className="muted">Carregando notas…</p>}{loaded&&!visible.length&&<p className="muted">{notes.length?'Nenhuma nota neste filtro.':'Nenhuma nota ainda. Use “Nova nota” ou importe uma planilha em Lotes e importação.'}</p>}
+
+  {dup&&<Dialog title={dup.length>1?`Duplicar ${dup.length} notas`:'Duplicar nota'} close={()=>setDup(null)}><form onSubmit={submitDuplicate}>
+   <p>{dup.length>1?`${dup.length} notas, total ${money(dup.reduce((s,n)=>s+n.amount_cents,0))}.`:`${dup[0].raw.nome_tomador} · ${money(dup[0].amount_cents)} · competência atual ${dateBR(dup[0].raw.competencia)}`}</p>
+   <label>Nova competência<input required type="date" value={dupDate} onChange={e=>{setDupDate(e.target.value);setRequestId(crypto.randomUUID())}}/></label>
+   <p className="muted">Tomador, serviço, valor e tributos são copiados. Cada cópia nasce validada e pode ser editada antes de emitir. Não é possível criar nota idêntica na mesma competência.</p>
+   <label className="checkLabel"><input type="checkbox" checked={dupOk} onChange={e=>setDupOk(e.target.checked)}/>Conferi que valor, descrição e tributos continuam corretos para a nova competência.</label>
+   {error&&<div className="error" role="alert">{error}</div>}
+   <div className="modalActions"><button type="button" onClick={()=>setDup(null)}>Cancelar</button><button className="primary" disabled={busy||!dupDate||!dupOk}><Copy size={16}/> Duplicar</button></div></form></Dialog>}
+
+  {emitting&&(()=>{const c=companyOf(emitting.company_id),p=c?.config.perfil_fiscal;return <Dialog title="Emitir nota" close={()=>setEmitting(null)}><form onSubmit={submitEmit}>
+   <div className="reportRow"><strong>{emitting.raw.nome_tomador}</strong><span>{money(emitting.amount_cents)} · competência {dateBR(emitting.raw.competencia)}</span></div>
+   <p>Emitente: <strong>{c?.name}</strong> ({c?.cnpj})</p>
+   {p?<p className="muted">Perfil fiscal: série {p.series} · {p.op_simp_nac==='3'?'ME/EPP optante do Simples':p.op_simp_nac==='2'?'MEI':'Não optante'} · IM {p.include_provider_im?'incluída':'omitida'} · alíquota {p.include_iss_rate?'incluída':'omitida'}{p.totals_mode==='simples_percent'?` · tributos SN ${p.simples_percent}%`:''}</p>:<div className="warning">Esta empresa ainda não tem perfil fiscal. Configure em Empresas → Editar.</div>}
+   <div className="warning">Produção restrita (testes). O site reserva o próximo número e baixa o XML; a assinatura e o envio continuam no conector, no PC com o certificado.</div>
+   <label className="checkLabel"><input type="checkbox" checked={emitOk} onChange={e=>setEmitOk(e.target.checked)}/>Conferi emitente, tomador, competência e valor. Autorizo reservar o próximo número desta série.</label>
+   {error&&<div className="error" role="alert">{error}</div>}
+   <div className="modalActions"><button type="button" onClick={()=>setEmitting(null)}>Cancelar</button><button className="primary" disabled={busy||!emitOk||!p}><Send size={16}/> Reservar e baixar XML</button></div></form></Dialog>})()}
+
+  {discarding&&<Dialog title="Descartar reserva" close={()=>setDiscarding(null)}><form onSubmit={submitDiscard}>
+   <p>DPS série {discarding.dps?.series} nº {discarding.dps?.number} · {discarding.raw.nome_tomador}. O número fica ocupado e nunca é reutilizado; a nota volta a poder ser emitida.</p>
+   <label>Motivo do descarte<input required minLength={5} maxLength={500} value={reason} onChange={e=>setReason(e.target.value)}/></label>
+   <label className="checkLabel"><input type="checkbox" checked={discardOk} onChange={e=>setDiscardOk(e.target.checked)}/>Confirmo que esta DPS não foi autorizada: não foi enviada, ou o conector registrou rejeição.</label>
+   {error&&<div className="error" role="alert">{error}</div>}
+   <div className="modalActions"><button type="button" onClick={()=>setDiscarding(null)}>Cancelar</button><button className="primary" disabled={busy||!discardOk||reason.trim().length<5}>Descartar reserva</button></div></form></Dialog>}
+
+  {editing&&<Dialog title={editing.note?'Editar nota':'Nova nota'} close={()=>setEditing(null)}><form onSubmit={submitEdit}><div className="formGrid">
+   <label>Empresa emitente<select required value={editCompany?.id||''} onChange={e=>chooseCompany(e.target.value)}><option value="">Selecione</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+   <label>Tomador cadastrado<select value={customers.find(t=>t.company_id===editCompany?.id&&t.document===editing.raw.documento_tomador)?.id||''} onChange={e=>{const t=customers.find(t=>String(t.id)===e.target.value);if(t){field('documento_tomador',t.document);field('nome_tomador',t.name)}}}><option value="">Preencher manualmente</option>{customers.filter(t=>t.company_id===editCompany?.id).map(t=><option key={t.id} value={t.id}>{t.name} · {t.document}</option>)}</select></label>
+   <label>CPF / CNPJ do tomador<input required value={editing.raw.documento_tomador} onChange={e=>field('documento_tomador',e.target.value)}/></label>
+   <label>Nome do tomador<input required value={editing.raw.nome_tomador} onChange={e=>field('nome_tomador',e.target.value)}/></label>
+   <label>Modelo de serviço<select value="" onChange={e=>{const s=services.find(s=>String(s.id)===e.target.value);if(s)setEditing(ed=>ed&&({...ed,raw:{...ed.raw,descricao_servico:s.config.descricao||s.name,codigo_tributacao_nacional:s.config.codigo_tributacao_nacional||'',codigo_tributacao_municipal:s.config.codigo_tributacao_municipal||'',valor_servico:s.config.valor_habitual||ed.raw.valor_servico}}))}}><option value="">Usar modelo cadastrado</option>{services.filter(s=>s.company_id===editCompany?.id).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+   <label>Competência<input required type="date" value={editing.raw.competencia} onChange={e=>field('competencia',e.target.value)}/></label>
+   <label className="wide">Descrição do serviço<textarea required value={editing.raw.descricao_servico} onChange={e=>field('descricao_servico',e.target.value)}/></label>
+   <label>Valor (R$)<input required inputMode="decimal" value={editing.raw.valor_servico} onChange={e=>field('valor_servico',e.target.value)}/></label>
+   <label>Código tributação nacional<input required value={editing.raw.codigo_tributacao_nacional} onChange={e=>field('codigo_tributacao_nacional',e.target.value)}/></label>
+   <label>Código tributação municipal (opcional)<input value={editing.raw.codigo_tributacao_municipal} onChange={e=>field('codigo_tributacao_municipal',e.target.value)}/></label>
+   <label>Município da prestação (IBGE)<input required value={editing.raw.municipio_ibge} onChange={e=>field('municipio_ibge',e.target.value)}/></label>
+   <label>Alíquota ISS (%)<input required inputMode="decimal" value={editing.raw.iss_aliquota} onChange={e=>field('iss_aliquota',e.target.value)}/></label>
+   <label>ISS retido<select value={editing.raw.iss_retido} onChange={e=>field('iss_retido',e.target.value)}><option value="nao">Não</option><option value="sim">Sim</option></select></label>
+   {['irrf','pis','cofins','csll','inss'].map(k=><label key={k}>Retenção {k.toUpperCase()} (R$)<input inputMode="decimal" value={taxes[k]||''} onChange={e=>{const next={...taxes};if(e.target.value)next[k]=e.target.value;else delete next[k];field('retencoes',JSON.stringify(next))}}/></label>)}
+   <label className="wide">Observações (opcional)<input value={editing.raw.observacoes} onChange={e=>field('observacoes',e.target.value)}/></label>
+  </div><p className="muted">A validação é cadastral; confira os tributos conforme o caso. Ao salvar, a nota é validada.</p>
+  {error&&<div className="error" role="alert">{error}</div>}
+  <div className="modalActions"><button type="button" onClick={()=>setEditing(null)}>Cancelar</button><button className="primary" disabled={busy}>Salvar nota</button></div></form></Dialog>}
+ </section>;
+}

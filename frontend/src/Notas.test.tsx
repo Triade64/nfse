@@ -52,3 +52,12 @@ it('shows API refusal inside the duplicate dialog',async()=>{
  fireEvent.submit(within(dialog).getByRole('button',{name:/Duplicar/}).closest('form')!);
  await waitFor(()=>expect(within(dialog).getByRole('alert').textContent).toContain('nota igual'));
 });
+
+it('hides Emitir and explains E0235 when a CNPJ customer has no address',async()=>{
+ const pj={...ready,id:11,raw:{...raw,documento_tomador:'11222333000181',nome_tomador:'CLIENTE PJ'},address_missing:true};
+ const api=vi.fn().mockResolvedValueOnce([pj]);
+ render(<Notas api={api} companies={companies} customers={[]} services={[]} role="admin"/>);
+ await screen.findByText('CLIENTE PJ');
+ expect(screen.queryByRole('button',{name:/Emitir/})).toBeNull();
+ expect(screen.getByText(/E0235/)).toBeTruthy();
+});

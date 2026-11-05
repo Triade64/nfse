@@ -9,6 +9,7 @@ from lxml import etree
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .validation import normalize
 from .fiscal import validate_xml
+from .tomador import address_required
 
 NS = 'http://www.sped.fazenda.gov.br/nfse'
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / 'schemas' / 'restricted-20261020'
@@ -114,13 +115,13 @@ def normalize_series(series: str) -> str:
         raise ValueError('Série inválida.')
     return str(int(series))
 
-def build_preview(raw: dict, company: dict, options: PreviewOptions) -> bytes:
-    return build_dps(raw, company, options, options.own_company_cnpj, options.series, options.number, options.issued_at, 'Triade-Offline-0.7')
+def build_preview(raw: dict, company: dict, options: PreviewOptions, tomador_address: dict | None = None) -> bytes:
+    return build_dps(raw, company, options, options.own_company_cnpj, options.series, options.number, options.issued_at, 'Triade-Offline-0.7', tomador_address)
 
 def dps_identifier(municipality: str, cnpj: str, series: str, number: str) -> str:
     return f"DPS{municipality}2{cnpj}{series.zfill(5)}{number.zfill(15)}"
 
-def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj: str, series: str, number: str, issued_at: datetime, ver_aplic: str) -> bytes:
+def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj: str, series: str, number: str, issued_at: datetime, ver_aplic: str, tomador_address: dict | None = None) -> bytes:
     check_instant(issued_at)
     row, errors, _, _ = normalize(raw)
     if errors:
@@ -152,6 +153,13 @@ def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj
     if options.reg_ap_trib_sn:add(regime,'regApTribSN',options.reg_ap_trib_sn)
     add(regime,'regEspTrib',options.reg_esp_trib)
     toma=add(info,'toma'); add(toma,'CNPJ' if len(row['documento_tomador'])==14 else 'CPF',row['documento_tomador']);add(toma,'xNome',row['nome_tomador'])
+    if tomador_address is None and address_required(row['documento_tomador']):
+        raise ValueError('Tomador com CNPJ exige endereço completo (regra E0235). Cadastre CEP, logradouro, número, bairro e município em Tomadores.')
+    if tomador_address is not None:
+        end=add(toma,'end');nac=add(end,'endNac');add(nac,'cMun',tomador_address['municipio_ibge']);add(nac,'CEP',tomador_address['cep'])
+        add(end,'xLgr',tomador_address['logradouro']);add(end,'nro',tomador_address['numero'])
+        if tomador_address['complemento']:add(end,'xCpl',tomador_address['complemento'])
+        add(end,'xBairro',tomador_address['bairro'])
     serv=add(info,'serv'); add(add(serv,'locPrest'),'cLocPrestacao',row['municipio_ibge'])
     code=add(serv,'cServ'); add(code,'cTribNac',row['codigo_tributacao_nacional'])
     if row['codigo_tributacao_municipal']:add(code,'cTribMun',row['codigo_tributacao_municipal'])

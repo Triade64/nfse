@@ -12,7 +12,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, Response
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict
@@ -141,6 +141,8 @@ app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
 async def local_protection(request,call_next):
+    if request.url.path=='/api/integrations/restricted/diagnostic':
+        return JSONResponse({'detail':'Diagnóstico por upload desativado. Use o conector local em Configurações.'},status_code=410)
     if request.method not in ('GET','HEAD','OPTIONS') and request.headers.get('X-Requested-With') != 'nfse-local':
         return JSONResponse({'detail':'Requisição sem proteção de origem'},status_code=403)
     origin=request.headers.get('origin')
@@ -164,22 +166,18 @@ class Credentials(BaseModel):
 class SetupInput(Credentials):
     setup_token:str|None=Field(default=None,max_length=512)
 
-@app.post('/api/integrations/restricted/diagnostic')
-async def restricted_diagnostic(file:UploadFile=File(...),password:str=Form(...),consent:bool=Form(False),check_connection:bool=Form(False),u=Depends(current_user),db=Depends(db_session)):
+@app.get('/api/local-connector/download')
+def download_local_connector(u=Depends(current_user)):
     role(u,['admin'])
-    if not consent:raise HTTPException(422,'Confirme o envio temporário do A1 e da senha para este diagnóstico.')
-    from .restricted_diagnostic import diagnose,DiagnosticError,MAX_PFX
-    from starlette.concurrency import run_in_threadpool
-    try:
-        data=await file.read(MAX_PFX+1)
-        if len(data)>MAX_PFX:raise HTTPException(413,'Arquivo maior que 256 KB.')
-        result=await run_in_threadpool(diagnose,data,password,check_connection)
-    except DiagnosticError as error:
-        raise HTTPException(422,str(error)) from None
-    finally:await file.close()
-    audit(db,u,'restricted_diagnostic','user',u.id,{'connection_requested':check_connection,'http_status':result['connection']['http_status']})
-    db.commit()
-    return result
+    package=ROOT/'local_connector'
+    names=['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','LEIA-ME.txt']
+    if any(not (package/name).is_file() for name in names):
+        raise HTTPException(503,'Pacote do conector ainda não disponível neste deployment.')
+    output=io.BytesIO()
+    with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
+        for name in names:archive.writestr('Triade_Conector_Local/'+name,(package/name).read_bytes())
+    output.seek(0)
+    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_1.zip"'})
 
 @app.get('/api/setup')
 def setup_status(db=Depends(db_session)):

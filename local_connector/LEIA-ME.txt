@@ -1,0 +1,16 @@
+TRIADE NFS-e | CONECTOR LOCAL 0.1 - DIAGNOSTICO
+
+1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
+2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
+3. Abra Abrir_Conector.cmd. Nao precisa de Python ou permissao de administrador.
+4. Selecione o certificado ja instalado no Windows (preferencial), ou o arquivo A1 local e a senha.
+5. Deixe a conexao desmarcada para verificacao local. Marque-a para um GET da documentacao oficial de producao restrita.
+6. Clique Verificar e depois Copiar resultado. Compartilhe apenas esse resultado.
+
+Requer Windows 10/11 atualizado, Windows PowerShell 5.1 e .NET Framework 4.7.2 ou posterior. A politica RemoteSigned e usada apenas no processo iniciado, sem alterar a politica permanente. Politicas da empresa podem bloquear scripts: procure a TI; nao desative controles corporativos.
+
+O conector nao faz upload do arquivo, da senha ou da chave privada. Na autenticacao TLS, o certificado PUBLICO e as provas criptograficas sao apresentados ao servidor do governo. O A1 temporario usa EphemeralKeySet, sem instalar a chave; algumas combinacoes de Schannel/.NET nao aceitam essa chave para TLS. Nesse caso, selecione um certificado que ja esteja instalado no Windows. Nao ha fallback para persistir ou exportar a chave.
+
+Nao ha servidor HTTP local, pareamento com o site, emissao, assinatura de DPS, cancelamento ou atualizacao automatica nesta versao. O resultado e copiado manualmente. Nao sao validados cadeia ICP-Brasil, revogacao, procuracao ou credenciamento. HTTP 200 da documentacao nao confirma autorizacao fiscal. Certificados A3/token nao foram homologados.
+
+O certificado original continua onde voce o guardou. Feche o programa ao terminar. Nenhum log de certificado, senha ou nome do titular e gravado pelo conector. O Windows e o ambiente local continuam responsaveis pela seguranca da memoria, arquivos e certificados ja instalados.

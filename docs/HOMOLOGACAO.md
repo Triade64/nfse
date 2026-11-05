@@ -1,41 +1,33 @@
-# Produção restrita — levantamento em 04/11/2026
+# Produção restrita — conector local
 
-A simulação do MVP não envia DPS à SEFIN. A integração autenticada ainda não está habilitada. Produção permanece bloqueada.
+Atualizado em 05/11/2026. Preferência do escritório: o certificado e a senha devem permanecer no PC. A simulação do site não envia DPS; produção permanece bloqueada.
 
-## Fontes oficiais verificadas
+## Fluxo disponível
 
-- Catálogo de APIs: https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/apis-prod-restrita-e-producao
-- Swagger indicado para SEFIN de testes: https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/docs/index
-- Documentação específica de testes: https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/producao-restrita
-- Pacote indicado: NFSe-ESQUEMAS_XSD-PRODREST-v1.01-20261020, ligado no catálogo a https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/producao-restrita/esquemas_prod_restrita_20261020.zip
-- Manual API contribuinte: https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/documentacao-atual/manual-contribuintes-emissor-publico-api-sistema-nacional-nfs-e-v1-2-out2025.pdf
-- Representação por procuração/vínculos, disponível a partir de 01/11/2026: https://www.gov.br/nfse/pt-br/noticias/nova-funcionalidade-possibilita-representacao-e-alternancia-de-perfis-na-nfs-e
+Em Configurações, o administrador baixa o ZIP do conector local 0.1. O programa usa Windows PowerShell 5.1 e .NET Framework, sem Python. Ele pode selecionar um certificado já instalado no repositório CurrentUser/My ou abrir um A1 em memória com EphemeralKeySet. Não exporta a chave, instala certificados ou envia arquivo/senha ao site.
 
-## Confirmado e pendente
+O diagnóstico externo é opcional: somente GET para https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/docs/index . Certificado público e prova criptográfica são apresentados na autenticação TLS; chave privada e senha permanecem locais. Redirecionamentos são desabilitados e a verificação TLS do Windows não é substituída. Não há URL configurável. Algumas versões de Schannel/.NET não aceitam chave efêmera para TLS; o programa falha sem persistir a chave e orienta usar um certificado já instalado.
 
-O catálogo separa os endereços de testes e produção. A documentação de testes inclui grupos IBS/CBS e pacote de 20/10/2026; não usar automaticamente os XSD de produção de fevereiro já incluídos no projeto. A notícia oficial confirma representação nas APIs de Emissão e Distribuição, validada pelo certificado da conexão e assinaturas, mediante autorizações pertinentes. Isso não comprova a autorização de nenhum CNPJ do escritório.
+O resultado contém somente situação, validade e status HTTP; não contém CPF/CNPJ, nome, senha ou chave. O operador o copia manualmente. Não há pareamento, servidor localhost, fila automática, assinatura ou envio de DPS nesta versão. A3/token não foi homologado. HTTP 200 da documentação não comprova autorização para emissão ou representação.
 
-O manual descreve POST /nfse, GET /nfse/{chaveAcesso}, GET e HEAD /dps/{id}. As rotas são relativas: base de API, contratos JSON, assinatura e regras atuais devem ser conferidos no Swagger antes da implementação. Não foram deduzidas URLs adicionais nem implementados envios a partir de suposições.
+## Upload removido
 
-Nesta verificação, o acesso ao Swagger falhou (502 na ferramenta de pesquisa e 503 na tentativa HTTP direta). O download direto do pacote XSD retornou 403. Isso descreve somente estas tentativas, não comprova indisponibilidade geral ou a causa da rejeição. Nenhum XSD novo foi instalado e nenhum envio autenticado foi feito.
+O formulário anterior de upload foi removido. A rota antiga `/api/integrations/restricted/diagnostic` responde HTTP 410 no middleware, antes do processamento do corpo multipart. O site não oferece mais coleta de A1/senha; a implementação anterior de importação do A1 no servidor foi retirada. Logs antigos de auditoria continham somente solicitação/status, não certificados.
 
-## Próximo teste autorizado: somente homologação
+## Fontes oficiais
 
-1. Identificar primeiro emitente e certificado disponível. A1 em PKCS#12 é a opção técnica preferida para servidor; token/cartão A3 exige outra forma de integração e não deve ser presumido compatível com Vercel.
-2. Conferir representação/credenciamento e município do emitente de teste. Não presumir que gov.br/senha autentique a API.
-3. Obter contrato OpenAPI e XSD de testes, registrar versão/hash e validar XML offline.
-4. Configurar certificado e senha em canal seguro, segregados dos segredos de banco e nunca no GitHub/chat/logs. Há um formulário exclusivo de diagnóstico temporário do A1 em Configurações, com consentimento explícito e perfil administrador. Ele não guarda credenciais para uso posterior e não habilita emissão.
-5. Testar conexão e consulta antes de habilitar aprovação específica de envio para testes. Persistir identificador da DPS antes do envio; em timeout consultar antes de qualquer reenvio.
-6. Guardar XML/retorno de teste separadamente e identificar explicitamente o ambiente. Não converter um resultado Simulado em Emitido.
+- Catálogo: https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/apis-prod-restrita-e-producao
+- Testes/XSD: https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/producao-restrita
+- Referência de testes: NFSe-ESQUEMAS_XSD-PRODREST-v1.01-20261020. Não reutilizar automaticamente o pacote de produção de fevereiro.
+- Representação por certificado/assinatura e procuração ou vínculos: https://www.gov.br/nfse/pt-br/noticias/nova-funcionalidade-possibilita-representacao-e-alternancia-de-perfis-na-nfs-e
+- Microsoft EphemeralKeySet: https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.x509certificates.x509keystorageflags?view=netframework-4.8.1
 
-A exclusão de rascunhos foi publicada separadamente, sem remover dados do usuário automaticamente: 35 testes backend e 10 frontend passaram. Documentos com fila, processamento ou DPS são bloqueados para exclusão.
+Na pesquisa anterior, o Swagger retornou 502/503 e o download direto do XSD retornou 403. Isso não comprova indisponibilidade geral. Ainda não houve conexão autenticada com o certificado do escritório, instalação dos novos XSD, assinatura ou envio de DPS.
 
-## Diagnóstico A1 pela interface
+## Verificação
 
-Em Configurações, o administrador pode enviar um PKCS#12 de até 256 KB e sua senha via HTTPS, com consentimento explícito. A API verifica abertura, presença da chave privada, correspondência com a chave pública, validade temporal e finalidade de cliente quando a extensão existir. O resultado não contém nome/CNPJ do titular, chave, senha ou arquivo.
+37 testes backend passaram, incluindo bloqueio de upload e download restrito do pacote. Os testes Windows usam apenas certificados autogerados e verificam parser PowerShell, validade, presença da chave, senha incorreta, importação efêmera, redirects e construção da interface. O workflow `.github/workflows/local-connector.yml` executa no Windows; seu resultado deve ser conferido antes de declarar a compatibilidade verificada. A estação de desenvolvimento é Linux.
 
-O teste externo é opcional e faz apenas GET para o endereço oficial de documentação de produção restrita acima. TLS do servidor e hostname são verificados; redirecionamentos não são seguidos. A chave é carregada no contexto TLS usando um arquivo temporário criptografado, removido em seguida. O conteúdo e a senha não são persistidos no banco nem nos logs; a auditoria guarda somente a solicitação do teste e o status HTTP. Dados da requisição podem permanecer em memória durante seu processamento; não há promessa de apagamento físico da memória Python.
+## Continuação
 
-HTTP 200 significa resposta da documentação, não autorização de emissão ou validação da representação. O diagnóstico não verifica cadeia ICP-Brasil, revogação, procuração ou credenciamento. Não assina XML, não envia DPS e não altera os estados fiscais de qualquer lote.
-
-Validação: 41 testes backend, 12 testes frontend e compilação TypeScript/Vite passaram. Os testes novos usam certificados autogerados fictícios, sem validade ICP-Brasil. Ainda não houve teste com o certificado do escritório; nenhum certificado real foi recebido durante o desenvolvimento.
+Confirmar diagnóstico no PC do escritório; obter contrato OpenAPI e XSD atuais; validar credenciamento/representação e município do primeiro emitente; implementar assinatura e consultas no conector; só depois parear com o site por token de dispositivo revogável e fila com aprovação específica de homologação. Timeout fiscal exige consulta antes de reenvio. Emissão em produção requer outra autorização expressa.

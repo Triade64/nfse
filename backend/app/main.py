@@ -31,6 +31,8 @@ from .security import current_user, db_session, hasher, role, allowed_company, c
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
 from urllib.parse import urlencode
 from .nfse_result import check_authorized_nfse
+from .danfse import build_danfse
+from lxml import etree
 from .nbs import nbs_table, format_nbs
 from .tomador import normalize_address, complete_address, address_required
 from .dps_preview import PreviewOptions, ReserveOptions, FiscalProfile, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, SERIES_PATTERN, BRASILIA
@@ -146,7 +148,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.9.1',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.9.2',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -189,7 +191,7 @@ def download_local_connector(u=Depends(current_user)):
         for path in sorted(SCHEMA_DIR.glob('*.xsd')):
             archive.writestr('Triade_Conector_Local/schemas/'+path.name,path.read_bytes())
     output.seek(0)
-    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_9_1.zip"'})
+    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_9_2.zip"'})
 
 @app.post('/api/drafts/{id}/restricted-preview')
 def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Depends(db_session)):
@@ -215,7 +217,9 @@ def batch_has_dps(db,batch_id):
 
 def dps_public(x):
     data=serialize(x);data.pop('xml',None);data.pop('nfse_xml',None);data.pop('danfse_pdf',None)
-    data['has_danfse']=x.danfse_pdf is not None;return data
+    # 0.9.2: an authorized NFS-e always has a DANFSe: the official PDF if one was received, otherwise generated from its XML.
+    data['has_danfse']=x.danfse_pdf is not None or (x.status=='Autorizada' and bool(x.nfse_xml))
+    data['danfse_official']=x.danfse_pdf is not None;return data
 
 class SeriesInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -457,7 +461,7 @@ def create_ticket(data:TicketInput,request:Request,u=Depends(current_user),db=De
     for dps_id in data.dps_ids:
         x=get_or_404(db,DPS,dps_id)
         if x.company_id:allowed_company(db,u,x.company_id)
-        danfse_only=x.status=='Autorizada' and x.danfse_pdf is None
+        danfse_only=False  # 0.9.2: the site generates the DANFSe; no connector trip is needed for it
         if (x.status not in ('Reservada','Desconhecida') and not danfse_only) or not x.xml:blocked.append(f'{x.series}/{x.number} ({x.status})')
     if blocked:raise HTTPException(409,'Só DPS reservadas, em consulta ou autorizadas sem DANFSe podem ir ao conector: '+', '.join(blocked))
     token=secrets.token_urlsafe(32)
@@ -475,7 +479,7 @@ def connector_ticket(request:Request,db):
 
 def job_public(x,d):
     return {'dps_id':x.id,'identifier':x.identifier,'series':x.series,'number':x.number,'status':x.status,'xml':x.xml,'xml_sha256':x.xml_sha256,
-            'access_key':x.access_key,'needs_danfse':x.status=='Autorizada' and x.danfse_pdf is None,
+            'access_key':x.access_key,'needs_danfse':False,
             'summary':{'cnpj':d.raw.get('cnpj_emitente'),'tomador':d.raw.get('nome_tomador'),'competencia':d.raw.get('competencia'),'valor':d.raw.get('valor_servico')}}
 
 @app.get('/api/connector/jobs')
@@ -545,8 +549,13 @@ def connector_danfse(dps_id:int,data:DanfseInput,request:Request,db=Depends(db_s
 def danfse_download(id:int,u=Depends(current_user),db=Depends(db_session)):
     x=get_or_404(db,DPS,id)
     if x.company_id:allowed_company(db,u,x.company_id)
-    if x.danfse_pdf is None:raise HTTPException(404,'DANFSe ainda não obtido para esta NFS-e.')
-    return Response(bytes(x.danfse_pdf),media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename="DANFSe_{x.access_key}.pdf"'})
+    if x.danfse_pdf is not None:pdf=bytes(x.danfse_pdf)
+    elif x.status=='Autorizada' and x.nfse_xml:
+        try:pdf=build_danfse(x.nfse_xml)
+        except (ValueError,etree.XMLSyntaxError):raise HTTPException(422,'Não foi possível montar o DANFSe a partir do XML da NFS-e.') from None
+    else:raise HTTPException(404,'DANFSe disponível somente para NFS-e autorizada.')
+    audit(db,u,'download_danfse','dps',x.id,{'official':x.danfse_pdf is not None});db.commit()
+    return Response(pdf,media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename="DANFSe_{x.access_key}.pdf"'})
 
 @app.get('/api/dps/{id}/nfse.xml')
 def nfse_xml_download(id:int,u=Depends(current_user),db=Depends(db_session)):

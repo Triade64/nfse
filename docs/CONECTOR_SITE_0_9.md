@@ -85,3 +85,38 @@ Não testado: o registro do protocolo no Windows e a abertura pelo navegador, qu
 - frontend com 22 de 22 aprovados;
 - conector com todas as suítes aprovadas (DANFSe após autorização e após consulta, 404, resposta não-PDF, job só de DANFSe sem assinatura e sem SEFIN);
 - ponta a ponta local: autorização seguida do DANFSe, com o site servindo `application/pdf`.
+
+### Verificação do DANFSe na API (05/11/2026)
+
+Na primeira chamada real, a NFS-e (DPS série 1 nº 9) foi autorizada, mas o DANFSe voltou `DANFSE_HTTP_404`, também numa segunda tentativa cerca de 20 minutos depois. Com autorização do usuário, a documentação foi lida com o certificado do escritório, só por GET:
+
+- **ADN de produção restrita:**
+  - tudo em `/danfse/...` responde 404, inclusive `/danfse/docs/index.html`, que o portal indica;
+  - as especificações disponíveis (`/adn`, `/contribuintes`, `/municipios`, salvas em `docs/official/adn-restrita-*.json`) não têm nenhum serviço de DANFSe: só recepção de lotes, distribuição por NSU (`/DFe/{NSU}`) e eventos.
+- **ADN de produção:** `/danfse/docs/...` responde 503 (indisponível).
+- **Manuais oficiais**, em `docs/official`:
+  - "Guia para utilização das APIs do ADN" (v1.0, 12/02/2026): só distribuição e eventos;
+  - "Guia para utilização das APIs do Emissor Público Nacional" (v1.2): parâmetros municipais, NFS-e, DPS e eventos.
+  - **Nenhum dos dois descreve API de DANFSe.**
+
+**Conclusão:** hoje não existe API documentada e disponível para o contribuinte obter o DANFSe na produção restrita. A busca pelo conector (0.9.1) não é um erro de endereço do nosso lado: o serviço não está publicado.
+
+## Atualização 0.9.2: DANFSe gerado pelo site
+
+Como não há API de DANFSe disponível (veja a verificação acima), o site gera o DANFSe a partir do **XML da NFS-e autorizada**, que ele já guarda e conferiu contra a DPS reservada (`backend/app/danfse.py`, biblioteca `fpdf2`).
+
+- **Rota:** `GET /api/dps/{id}/danfse.pdf` serve o PDF oficial, se um tiver sido recebido do conector; se não, gera o PDF na hora a partir de `dps.nfse_xml`. Fica disponível só para NFS-e autorizada, e cada download é auditado.
+- **Conteúdo, todo lido do XML:**
+  - número da NFS-e, chave, competência, emissão da DPS, autorização (`dhProc`), situação, série e número da DPS, município emissor e `nDFSe`;
+  - prestador (CNPJ, nome, endereço, Simples) e tomador (documento, nome, endereço);
+  - código de tributação nacional e descrição, NBS, local da prestação e de incidência, descrição do serviço;
+  - valores, tributação e retenção do ISSQN, alíquota, tributos aproximados e valor líquido;
+  - observações.
+- **Ambiente de testes** (`tpAmb=2`): faixa vermelha "PRODUÇÃO RESTRITA (AMBIENTE DE TESTES) — DOCUMENTO SEM VALOR FISCAL" e marca d'água.
+- **Rodapé:** identifica o documento como representação gráfica gerada a partir do XML autorizado e orienta a conferir a chave no Portal Nacional.
+- **Conector 0.9.2:** não chama mais o ADN depois da autorização. A busca continua disponível no código com `-FetchDanfse`, para quando o serviço for publicado. O site deixa de emitir ticket "só DANFSe".
+- **Testes:**
+  - backend com 87 de 87 aprovados: gerador (dados, aviso de testes, produção sem aviso, XML inválido) e rota (gerado sem ida ao conector, PDF oficial preferido, auditoria);
+  - frontend com 22 de 22 aprovados;
+  - conector com todas as suítes aprovadas, provando que por padrão não há chamada ao ADN;
+  - DANFSe gerado a partir da NFS-e real da DPS nº 9 conferido visualmente.

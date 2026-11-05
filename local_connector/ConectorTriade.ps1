@@ -13,7 +13,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeSite.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.9.1'
+$form.Text = 'Tríade NFS-e | Conector local 0.9.2'
 $form.ClientSize = [Drawing.Size]::new(720,705)
 $form.MinimumSize = [Drawing.Size]::new(736,744)
 $form.StartPosition = 'CenterScreen'
@@ -305,7 +305,7 @@ function Invoke-TriadeSiteFlow([string]$LaunchUrl) {
                 if($code -eq 'SITE_TICKET_EXPIRED'){break}
             }
         }
-        $script:lastSummary=(@('Tríade NFS-e | conector 0.9.1 pelo site','Ambiente: produção restrita (testes). Produção real bloqueada.') + $lines + @('','Volte ao site: a tela Notas atualiza a situação de cada nota.')) -join [Environment]::NewLine
+        $script:lastSummary=(@('Tríade NFS-e | conector 0.9.2 pelo site','Ambiente: produção restrita (testes). Produção real bloqueada.') + $lines + @('','Volte ao site: a tela Notas atualiza a situação de cada nota.')) -join [Environment]::NewLine
     } catch {
         $code=$_.Exception.Message;if($code -notmatch '^[A-Z0-9_]{3,40}$'){$code='UNCLASSIFIED'}
         $hint=@{LAUNCH_URL_INVALID='Link inválido. Gere de novo no site.';SITE_NOT_ALLOWED='Este link aponta para um site não autorizado. Nada foi feito.';SITE_TICKET_EXPIRED='O link expirou (15 minutos). Gere de novo no site.';CERT_NOT_FOUND='Nenhum certificado do Windows com o CNPJ do emitente foi encontrado.';CERT_NOT_SELECTED='Nenhum certificado selecionado.';SITE_MIXED_ISSUERS='O link mistura emitentes diferentes.'}[$code]

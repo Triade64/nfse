@@ -100,7 +100,7 @@ function Resolve-TriadeDocumentationReference {
         if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'sefin.producaorestrita.nfse.gov.br' -or $uri.Port -ne 443 -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) { return $null }
         $path=[Uri]::UnescapeDataString($uri.AbsolutePath)
         if ($path -notmatch '^/(API/)?SefinNacional/' -or $path.Contains('..') -or $path.Contains('\')) { return $null }
-        if ($Kind -eq 'json' -and ($path -match '(?i)(swagger|openapi)[^?]*\.json$' -or $path -match '(?i)^/API/SefinNacional/(swagger|docs)/(docs/)?v[0-9][A-Za-z0-9._-]*(/swagger)?$')) { return $uri }
+        if ($Kind -eq 'json' -and ($path -match '(?i)(swagger|openapi)[^?]*\.json$' -or $path -match '(?i)^/(API/)?SefinNacional/(swagger|docs)/(docs/)?v[0-9][A-Za-z0-9._-]*(/swagger)?$')) { return $uri }
         if ($Kind -eq 'script' -and $path -match '(?i)/(swagger-ui-init|swagger-initializer)\.js$') { return $uri }
     } catch { }
     return $null

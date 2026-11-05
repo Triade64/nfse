@@ -57,3 +57,12 @@ Uma revisão de envio exige: original com hash íntegro e assinatura corresponde
 Original estado.json, dps-assinada.xml e resposta-envio.json permanecem intactos. Registro correcao-fuso.json vincula somente um hash revisado; tentativa revisada usa journal separado sob ajuste-fuso/IdDPS. Nunca se zera attempted da tentativa anterior. O journal da revisão mantém todas as proteções contra reenvio e resultado desconhecido. Após registro, consultas do XML revisado são roteadas ao journal revisado.
 
 CI usa retorno de rejeição e transporte fictícios; cobre equivalência do instante, consentimento específico, preservação byte a byte do histórico original, recuperação/limite de tentativa, campos fiscais alterados, outro código de erro, HEAD encontrando documento e timeout da revisão. Nenhum teste fiscal real foi executado pelo agente.
+
+
+## Atualização 0.8.4 — omissão de IM após E0120
+
+Mensagem da API fornecida pelo operador: IM do prestador não deve ser informada porque não existem informações complementares no CNC do município emissor. O XML enviado continha prest/IM. Não foi alterado o cadastro da empresa.
+
+Gerador exige escolha explícita de inclusão/omissão da IM. Conector verifica assinatura e gera nova cópia removendo somente prest/IM, com o mesmo horário, IdDPS e demais campos. Envio da revisão exige rejeição E0120 isolada, ambiente 2, confirmação específica, comparação canônica de todos os campos restantes e HEAD 404. Revisões anteriores são encaminhadas por seus registros de hashes antes de comparar a nova cópia, suportando E0008 -> E0120 sem afrouxar a verificação de campos.
+
+Registros correcao-im.json/ajuste-im são separados dos originais, sem reset de attempted, remoção de arquivos ou atualização de dados reais no banco. A configuração de uma empresa não é inferida para outras. Testes cobrem omissão no gerador sem mutação cadastral, assinatura nova, confirmação, cadeia E0008/E0120, preservação byte a byte dos históricos, alterações indevidas, DPS existente e timeout sem reenvio.

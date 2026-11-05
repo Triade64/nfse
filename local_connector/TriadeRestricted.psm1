@@ -131,7 +131,7 @@ function Get-TriadeRestrictedFailureInfo {
  param([Exception]$Exception,[int]$LastHttp)
  $failure=Get-TriadeConnectionFailure -Exception $Exception
  $reason='UNCLASSIFIED';$cursor=$Exception
- $allowed=@('TIMEZONE_REVISION_INVALID','TIMEZONE_REVISION_BLOCKED','JOURNAL_INVALID','JOURNAL_CONFLICT','RESPONSE_FORMAT','RESPONSE_ENVIRONMENT','RESPONSE_ID','HTTP_SIZE','XML_SIZE','ENVELOPE_SIZE','NFSE_RECOVERY_PENDING','FILE_EXISTS')
+ $allowed=@('IM_REVISION_INVALID','IM_REVISION_BLOCKED','TIMEZONE_REVISION_INVALID','TIMEZONE_REVISION_BLOCKED','JOURNAL_INVALID','JOURNAL_CONFLICT','RESPONSE_FORMAT','RESPONSE_ENVIRONMENT','RESPONSE_ID','HTTP_SIZE','XML_SIZE','ENVELOPE_SIZE','NFSE_RECOVERY_PENDING','FILE_EXISTS')
  for($i=0;$i -lt 8 -and $null -ne $cursor;$i++){
   if($allowed -ccontains $cursor.Message){$reason=$cursor.Message}
   if($cursor.Data.Contains('TriadeHttpStatus')){
@@ -146,7 +146,7 @@ function Get-TriadeRestrictedResult {
  return [PSCustomObject]@{state=$State.status;attempted=[bool]$State.attempted;http_status=$HttpStatus;codes=$ErrorCodes;message=$Message}
 }
 function Invoke-TriadeSingleRestrictedDps {
- param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[Parameter(Mandatory=$true)][string]$JournalRoot,[Parameter(Mandatory=$true)][Net.Http.HttpClient]$Client,[switch]$ConfirmRestrictedSend,[switch]$ConfirmTimezoneRevision)
+ param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[Parameter(Mandatory=$true)][string]$JournalRoot,[Parameter(Mandatory=$true)][Net.Http.HttpClient]$Client,[switch]$ConfirmRestrictedSend,[switch]$ConfirmTimezoneRevision,[switch]$ConfirmImRevision)
  $review=Test-TriadeSignedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
  $hash=Get-TriadeXmlHash -Bytes $Bytes
  $directory=Join-Path $JournalRoot $review.identifier
@@ -162,36 +162,63 @@ function Invoke-TriadeSingleRestrictedDps {
    $savedXml=Join-Path $directory 'dps-assinada.xml'
    if(-not [IO.File]::Exists($savedXml) -or ([IO.FileInfo]::new($savedXml)).Length -gt 2097152 -or (Get-TriadeXmlHash -Bytes ([IO.File]::ReadAllBytes($savedXml))) -ne $state.xml_sha256){throw 'JOURNAL_INVALID'}
    if($state.xml_sha256 -ne $hash){
-    $phase='CONFERIR_REVISAO_FUSO'
-    if($state.status -ne 'Rejeitada em teste' -or -not $state.attempted){throw 'TIMEZONE_REVISION_BLOCKED'}
-    $previous=[IO.File]::ReadAllBytes($savedXml)
-    $change=Test-TriadeTimezoneOnlyRevision -Previous $previous -Revised $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+    $phase='CONFERIR_REVISAO'
+    if(-not $state.attempted){throw 'TIMEZONE_REVISION_BLOCKED'}
     $responsePath=Join-Path $directory 'resposta-envio.json'
     if(-not [IO.File]::Exists($responsePath) -or ([IO.FileInfo]::new($responsePath)).Length -gt 8388608){throw 'TIMEZONE_REVISION_BLOCKED'}
     $errorBody=Read-TriadeFiscalJson -Response ([PSCustomObject]@{text=[IO.File]::ReadAllText($responsePath)})
     $errors=@($errorBody.erros)
-    if($errors.Count -ne 1 -or $errors[0].codigo -cne 'E0008'){throw 'TIMEZONE_REVISION_BLOCKED'}
-    $registrationPath=Join-Path $directory 'correcao-fuso.json'
-    $revisionRoot=Join-Path $directory 'ajuste-fuso'
+    if($errors.Count -ne 1){throw 'TIMEZONE_REVISION_BLOCKED'}
+    $idProperty=$errorBody.PSObject.Properties['idDPS']
+    if($null -ne $idProperty -and -not [string]::IsNullOrEmpty([string]$idProperty.Value) -and $idProperty.Value -ne $review.identifier){throw 'RESPONSE_ID'}
+    switch -CaseSensitive ($errors[0].codigo){
+     'E0008' {$kind='timezone';$registrationName='correcao-fuso.json';$folder='ajuste-fuso';$reason='E0008_TIMEZONE_ONLY';$approved=$ConfirmTimezoneRevision;break}
+     'E0120' {$kind='im';$registrationName='correcao-im.json';$folder='ajuste-im';$reason='E0120_IM_ONLY';$approved=$ConfirmImRevision;break}
+     default {throw 'TIMEZONE_REVISION_BLOCKED'}
+    }
+    $registrationPath=Join-Path $directory $registrationName
+    $revisionRoot=Join-Path $directory $folder
     if([IO.File]::Exists($registrationPath)){
+     # Follow existing revision links BEFORE comparing the candidate against the old rejected payload.
+     # This supports E0008 -> E0120 without allowing changes against the wrong ancestor.
      if(([IO.FileInfo]::new($registrationPath)).Length -gt 4096){throw 'JOURNAL_INVALID'}
      $registered=[IO.File]::ReadAllText($registrationPath)|ConvertFrom-Json
-     if($registered.previous_sha256 -ne $state.xml_sha256 -or $registered.revised_sha256 -ne $hash){throw 'TIMEZONE_REVISION_BLOCKED'}
-     return Invoke-TriadeSingleRestrictedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $revisionRoot -Client $Client -ConfirmRestrictedSend:$ConfirmRestrictedSend
+     if($registered.previous_sha256 -ne $state.xml_sha256 -or $registered.revised_sha256 -notmatch '^[0-9a-f]{64}$' -or $registered.reason -cne $reason){throw 'JOURNAL_CONFLICT'}
+     $childDirectory=Join-Path $revisionRoot $review.identifier
+     if($registered.revised_sha256 -ne $hash){
+      $childStatePath=Join-Path $childDirectory 'estado.json'
+      if(-not [IO.File]::Exists($childStatePath) -or ([IO.FileInfo]::new($childStatePath)).Length -gt 32768){throw 'JOURNAL_CONFLICT'}
+      $childState=[IO.File]::ReadAllText($childStatePath)|ConvertFrom-Json
+      if($childState.xml_sha256 -ne $registered.revised_sha256){throw 'JOURNAL_CONFLICT'}
+     }
+     $childXml=Join-Path $childDirectory 'dps-assinada.xml'
+     if([IO.File]::Exists($childXml) -and (([IO.FileInfo]::new($childXml)).Length -gt 2097152 -or (Get-TriadeXmlHash -Bytes ([IO.File]::ReadAllBytes($childXml))) -ne $registered.revised_sha256)){throw 'JOURNAL_INVALID'}
+     # Parent queries may already have located an authorization; such a path becomes read-only.
+     $maySend=$ConfirmRestrictedSend -and $state.status -eq 'Rejeitada em teste'
+     return Invoke-TriadeSingleRestrictedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $revisionRoot -Client $Client -ConfirmRestrictedSend:$maySend -ConfirmTimezoneRevision:$ConfirmTimezoneRevision -ConfirmImRevision:$ConfirmImRevision
     }
-    if(-not $ConfirmRestrictedSend -or -not $ConfirmTimezoneRevision){
-     $result=Get-TriadeRestrictedResult -State $state -Message 'Revisão limitada ao fuso, mantendo o mesmo instante. A tentativa anterior será preservada; uma nova tentativa exige confirmação específica.'
-     $result|Add-Member -NotePropertyName timezone_revision -NotePropertyValue $change
+    if($state.status -ne 'Rejeitada em teste'){throw 'TIMEZONE_REVISION_BLOCKED'}
+    $previous=[IO.File]::ReadAllBytes($savedXml)
+    if($kind -eq 'timezone'){
+     $phase='CONFERIR_REVISAO_FUSO'
+     $change=Test-TriadeTimezoneOnlyRevision -Previous $previous -Revised $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+    }else{
+     $phase='CONFERIR_REVISAO_IM'
+     $change=Test-TriadeImOnlyRevision -Previous $previous -Revised $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+    }
+    if(-not $ConfirmRestrictedSend -or -not $approved){
+     $result=Get-TriadeRestrictedResult -State $state -Message 'Revisão limitada ao campo indicado pela rejeição. A tentativa anterior será preservada; uma nova tentativa exige confirmação específica.'
+     $property=if($kind -eq 'timezone'){'timezone_revision'}else{'im_revision'}
+     $result|Add-Member -NotePropertyName $property -NotePropertyValue $change
      return $result
     }
-    # Confirm absence before recording a new immutable revision branch. No old marker is reset.
     $phase='CONSULTAR_ANTES_DA_REVISAO'
     $check=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation HEAD_DPS -Identifier $review.identifier)
     $lastHttp=$check.status
     if($check.status -ne 404 -or -not [string]::IsNullOrWhiteSpace($check.text)){
-     return Get-TriadeRestrictedResult -State $state -HttpStatus $check.status -Message 'Não foi confirmada ausência da DPS. Revisão não enviada; consulte o resultado usando o XML original.'
+     return Get-TriadeRestrictedResult -State $state -HttpStatus $check.status -Message 'Não foi confirmada ausência da DPS. Revisão não enviada; consulte o resultado usando o XML da tentativa anterior.'
     }
-    $registration=@{previous_sha256=$state.xml_sha256;revised_sha256=$hash;created_utc=[DateTime]::UtcNow.ToString('o');reason='E0008_TIMEZONE_ONLY'}|ConvertTo-Json
+    $registration=@{previous_sha256=$state.xml_sha256;revised_sha256=$hash;created_utc=[DateTime]::UtcNow.ToString('o');reason=$reason}|ConvertTo-Json
     Write-TriadeDurableFile -Path $registrationPath -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($registration))
     return Invoke-TriadeSingleRestrictedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $revisionRoot -Client $Client -ConfirmRestrictedSend
    }

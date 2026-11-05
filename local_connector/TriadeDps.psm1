@@ -171,4 +171,40 @@ function Test-TriadeTimezoneOnlyRevision {
  if($canonical[0] -cne $canonical[1]){throw 'TIMEZONE_REVISION_INVALID'}
  return [PSCustomObject]@{before=$before;after=$after}
 }
-Export-ModuleMember -Function ConvertTo-TriadeBrasiliaDps,Test-TriadeTimezoneOnlyRevision,Read-TriadeDps,Get-TriadeDpsReview,Protect-TriadeOfflineDps,Test-TriadeSignedDps
+function ConvertTo-TriadeDpsWithoutIm {
+ param([byte[]]$Bytes,[Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[string]$SchemaDirectory)
+ $document=Read-TriadeDps -Bytes $Bytes -SchemaDirectory $SchemaDirectory
+ $signatures=$document.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#')
+ if($signatures.Count -gt 0){
+  $null=Test-TriadeSignedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+  $null=$signatures[0].ParentNode.RemoveChild($signatures[0])
+ }
+ $ns=[Xml.XmlNamespaceManager]::new($document.NameTable);$ns.AddNamespace('n','http://www.sped.fazenda.gov.br/nfse')
+ $im=$document.SelectSingleNode('/n:DPS/n:infDPS/n:prest/n:IM',$ns)
+ if($null -eq $im){throw 'IM_REVISION_INVALID'}
+ $null=$im.ParentNode.RemoveChild($im)
+ return ,([Text.UTF8Encoding]::new($false).GetBytes($document.OuterXml))
+}
+function Test-TriadeImOnlyRevision {
+ param([byte[]]$Previous,[byte[]]$Revised,[Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[string]$SchemaDirectory)
+ $old=Test-TriadeSignedDps -Bytes $Previous -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+ $new=Test-TriadeSignedDps -Bytes $Revised -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+ if($old.identifier -ne $new.identifier){throw 'IM_REVISION_INVALID'}
+ $a=Read-TriadeDps -Bytes $Previous -SchemaDirectory $SchemaDirectory
+ $b=Read-TriadeDps -Bytes $Revised -SchemaDirectory $SchemaDirectory
+ $ns=[Xml.XmlNamespaceManager]::new($a.NameTable);$ns.AddNamespace('n','http://www.sped.fazenda.gov.br/nfse')
+ $ns2=[Xml.XmlNamespaceManager]::new($b.NameTable);$ns2.AddNamespace('n','http://www.sped.fazenda.gov.br/nfse')
+ $im=$a.SelectSingleNode('/n:DPS/n:infDPS/n:prest/n:IM',$ns)
+ if($null -eq $im -or $null -ne $b.SelectSingleNode('/n:DPS/n:infDPS/n:prest/n:IM',$ns2)){throw 'IM_REVISION_INVALID'}
+ $null=$im.ParentNode.RemoveChild($im)
+ $canonical=@()
+ foreach($doc in @($a,$b)){
+  $sig=$doc.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#')[0];$null=$sig.ParentNode.RemoveChild($sig)
+  $transform=[Security.Cryptography.Xml.XmlDsigC14NTransform]::new();$transform.LoadInput($doc)
+  $output=$transform.GetOutput([IO.Stream]);$memory=[IO.MemoryStream]::new()
+  try{$output.CopyTo($memory);$canonical+=[Convert]::ToBase64String($memory.ToArray())}finally{$output.Dispose();$memory.Dispose()}
+ }
+ if($canonical[0] -cne $canonical[1]){throw 'IM_REVISION_INVALID'}
+ return [PSCustomObject]@{before='Inscrição municipal incluída';after='Inscrição municipal omitida somente neste XML'}
+}
+Export-ModuleMember -Function ConvertTo-TriadeDpsWithoutIm,Test-TriadeImOnlyRevision,ConvertTo-TriadeBrasiliaDps,Test-TriadeTimezoneOnlyRevision,Read-TriadeDps,Get-TriadeDpsReview,Protect-TriadeOfflineDps,Test-TriadeSignedDps

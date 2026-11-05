@@ -134,6 +134,7 @@ try{
  $warnings=@();Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'TriadeDps.psm1') -Force -WarningVariable warnings
  if($warnings.Count -ne 0){throw 'Aviso de verbo nao aprovado permanece.'}
  & (Join-Path $PSScriptRoot 'Test-Timezone.ps1') -Certificate $Certificate -SchemaDirectory $SchemaDirectory -Directory $Directory -Success $success
+ & (Join-Path $PSScriptRoot 'Test-Im.ps1') -Certificate $Certificate -SchemaDirectory $SchemaDirectory -Directory $Directory -Success $success
  Write-Output 'PASS: diagnostico seguro de timeout antes e depois do POST, ambiente zero em sucesso bloqueado e falha de gravacao, sem mensagem interna ou caminho privado.'
  Write-Output 'PASS: transporte simulado, confirmacao, journal antes do POST, 201/400/500, timeout, consulta sem reenvio, ambiente incorreto, redirect, GZip e verbos aprovados. Nenhuma chamada fiscal real.'
 }finally{foreach($item in $clients){$item.client.Dispose()}}

@@ -27,6 +27,7 @@ class PreviewOptions(BaseModel):
     reg_esp_trib: Literal['0','1','2','3','4','5','6','9']
     totals_mode: Literal['not_informed','simples_percent']
     simples_percent: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=2)
+    include_provider_im: bool
     include_iss_rate: bool
 
     @model_validator(mode='after')
@@ -68,7 +69,9 @@ def build_preview(raw: dict, company: dict, options: PreviewOptions) -> bytes:
     prest=add(info,'prest'); add(prest,'CNPJ',company['cnpj'])
     # IM/address/name are conditional and must be reviewed against municipal rules.
     im=str(company['config'].get('inscricao_municipal','')).strip()
-    if im:add(prest,'IM',im)
+    if options.include_provider_im:
+        if not im:raise ValueError('Cadastro sem inscrição municipal. Confira a exigência antes de incluí-la no XML.')
+        add(prest,'IM',im)
     regime=add(prest,'regTrib');add(regime,'opSimpNac',options.op_simp_nac)
     if options.reg_ap_trib_sn:add(regime,'regApTribSN',options.reg_ap_trib_sn)
     add(regime,'regEspTrib',options.reg_esp_trib)

@@ -8,7 +8,7 @@ from app.db import Session
 from app.models import DPS, NFSe, Audit
 from sqlalchemy import select
 
-OPTIONS=dict(revision=1,expected_raw={},own_company_cnpj='11222333000181',confirm_offline=True,confirm_scope=True,series='12',number='1',issued_at='2026-11-05T10:00:00-03:00',op_simp_nac='3',reg_ap_trib_sn='1',reg_esp_trib='0',totals_mode='simples_percent',simples_percent='6.00',include_iss_rate=False)
+OPTIONS=dict(include_provider_im=False,revision=1,expected_raw={},own_company_cnpj='11222333000181',confirm_offline=True,confirm_scope=True,series='12',number='1',issued_at='2026-11-05T10:00:00-03:00',op_simp_nac='3',reg_ap_trib_sn='1',reg_esp_trib='0',totals_mode='simples_percent',simples_percent='6.00',include_iss_rate=False)
 
 def test_new_restricted_layout_and_escaped_content(row,company):
     xml=build_preview({**row,'descricao_servico':'Teste & conferência <fictícia>'},company,PreviewOptions(**OPTIONS))
@@ -56,3 +56,17 @@ def test_utc_emission_uses_same_instant_in_brasilia(row,company):
     assert datetime.fromisoformat(text)==datetime.fromisoformat('2026-11-05T13:03:00+00:00')
     with pytest.raises(ValueError,match='futura'):
         PreviewOptions(**{**OPTIONS,'issued_at':datetime.now(timezone.utc)+timedelta(hours=1)})
+
+
+def test_im_is_explicit_without_changing_company_registration(row,company):
+    import copy
+    registered=copy.deepcopy(company)
+    registered['config']['inscricao_municipal']='1234567'
+    snapshot=copy.deepcopy(registered)
+    omitted=etree.fromstring(build_preview(row,registered,PreviewOptions(**OPTIONS)))
+    included=etree.fromstring(build_preview(row,registered,PreviewOptions(**{**OPTIONS,'include_provider_im':True})))
+    assert omitted.find('.//{*}prest/{*}IM') is None
+    assert included.find('.//{*}prest/{*}IM').text=='1234567'
+    assert registered==snapshot
+    with pytest.raises(ValueError,match='sem inscrição'):
+        build_preview(row,company,PreviewOptions(**{**OPTIONS,'include_provider_im':True}))

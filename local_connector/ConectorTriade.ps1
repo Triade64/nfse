@@ -10,7 +10,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeConnector.Core.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.5'
+$form.Text = 'Tríade NFS-e | Conector local 0.6'
 $form.ClientSize = [Drawing.Size]::new(720,650)
 $form.MinimumSize = [Drawing.Size]::new(736,689)
 $form.StartPosition = 'CenterScreen'
@@ -33,6 +33,7 @@ $null=Add-Label 'Na conexão, o certificado público é apresentado ao governo. 
 $run=[Windows.Forms.Button]::new();$run.Text='Verificar';$run.SetBounds(22,444,160,38);$form.Controls.Add($run)
 $copy=[Windows.Forms.Button]::new();$copy.Text='Copiar resultado';$copy.Enabled=$false;$copy.SetBounds(196,444,185,38);$form.Controls.Add($copy)
 $saveApi=[Windows.Forms.Button]::new();$saveApi.Text='Salvar OpenAPI';$saveApi.SetBounds(397,444,170,38);$form.Controls.Add($saveApi)
+$apiProbe=[Windows.Forms.Button]::new();$apiProbe.Text='Testar API';$apiProbe.SetBounds(580,444,117,38);$form.Controls.Add($apiProbe)
 $output=[Windows.Forms.TextBox]::new();$output.Multiline=$true;$output.ReadOnly=$true;$output.ScrollBars='Vertical';$output.SetBounds(22,495,675,130);$form.Controls.Add($output)
 
 $windowsButton.Add_Click({
@@ -80,7 +81,7 @@ $run.Add_Click({
             $temporary=Import-TriadeLocalA1 -Path $fileBox.Text -Password $secure;$active=$temporary
         }
         $check=Get-TriadeCertificateCheck -Certificate $active
-        $lines=@('Tríade NFS-e | diagnóstico local 0.5',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
+        $lines=@('Tríade NFS-e | diagnóstico local 0.6',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
         if ($null -ne $temporary) { $lines+='Origem: arquivo A1 temporário (chave efêmera).' } else { $lines+='Origem: certificado instalado no Windows.' }
         $lines+=('PowerShell: '+$PSVersionTable.PSVersion.ToString()+' | .NET: '+[Environment]::Version.ToString())
         if ($network.Checked) {
@@ -96,6 +97,21 @@ $run.Add_Click({
         $password.Clear();if ($null -ne $secure) { $secure.Dispose() };if ($null -ne $temporary) { $temporary.Dispose() }
         $form.UseWaitCursor=$false;$run.Enabled=$true;$windowsButton.Enabled=$true;$fileButton.Enabled=$true
     }
+})
+$apiProbe.Add_Click({
+    if ($null -eq $script:selectedCertificate) { $output.Text='Selecione o certificado instalado no Windows para este teste da API.';return }
+    $answer=[Windows.Forms.MessageBox]::Show($form,'Consultar a rota HEAD /dps com identificador de diagnóstico inválido, em produção restrita? Isso não envia DPS e não consulta uma nota real.','Tríade | Teste somente de leitura',[Windows.Forms.MessageBoxButtons]::YesNo,[Windows.Forms.MessageBoxIcon]::Information)
+    if ($answer -ne [Windows.Forms.DialogResult]::Yes) { return }
+    $apiProbe.Enabled=$false;$saveApi.Enabled=$false;$run.Enabled=$false;$windowsButton.Enabled=$false;$fileButton.Enabled=$false;$form.UseWaitCursor=$true;$output.Text='Consultando rota de diagnóstico...';$form.Refresh()
+    try {
+        $probe=Invoke-TriadeRestrictedApiProbe -Certificate $script:selectedCertificate
+        $lines=@('Tríade NFS-e | teste API somente de leitura 0.6','Ambiente: produção restrita. Origem: certificado instalado no Windows.','Método: HEAD /dps/diagnostico-local (identificador intencionalmente inválido).')
+        if ($null -ne $probe.http_status) { $lines+=('HTTP '+$probe.http_status) };$lines+=$probe.message
+        if ($null -ne $probe.failure) { $lines+=('Categoria: '+$probe.failure.category+' | Códigos: '+$probe.failure.codes);$lines+=('Tipos: '+$probe.failure.types) }
+        $lines+='Nenhuma DPS enviada. Produção continua bloqueada.'
+        $script:lastSummary=$lines -join [Environment]::NewLine;$output.Text=$script:lastSummary;$copy.Enabled=$true
+    } catch { $output.Text='Não foi possível concluir o diagnóstico da API. Nenhuma DPS foi enviada.' }
+    finally { $apiProbe.Enabled=$true;$saveApi.Enabled=$true;$run.Enabled=$true;$windowsButton.Enabled=$true;$fileButton.Enabled=$true;$form.UseWaitCursor=$false }
 })
 $saveApi.Add_Click({
     if ($null -eq $script:selectedCertificate) {

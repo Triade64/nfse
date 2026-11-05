@@ -99,7 +99,7 @@ function Resolve-TriadeDocumentationReference {
         $uri=[Uri]::new($BaseUri,$Reference.Replace('\/','/'))
         if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'sefin.producaorestrita.nfse.gov.br' -or $uri.Port -ne 443 -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) { return $null }
         $path=[Uri]::UnescapeDataString($uri.AbsolutePath)
-        if ($path -notmatch '^/API/SefinNacional/' -or $path.Contains('..') -or $path.Contains('\')) { return $null }
+        if ($path -notmatch '^/(API/)?SefinNacional/' -or $path.Contains('..') -or $path.Contains('\')) { return $null }
         if ($Kind -eq 'json' -and ($path -match '(?i)(swagger|openapi)[^?]*\.json$' -or $path -match '(?i)^/API/SefinNacional/(swagger|docs)/(docs/)?v[0-9][A-Za-z0-9._-]*(/swagger)?$')) { return $uri }
         if ($Kind -eq 'script' -and $path -match '(?i)/(swagger-ui-init|swagger-initializer)\.js$') { return $uri }
     } catch { }
@@ -114,6 +114,13 @@ function Find-TriadeOpenApiReferences {
     foreach($match in [Regex]::Matches($normalized,'(?i)(?:["'']?url["'']?)\s*:\s*["''](?<url>[^"''\r\n]+)["'']')) {
         $uri=Resolve-TriadeDocumentationReference -BaseUri $BaseUri -Reference $match.Groups['url'].Value -Kind json
         if ($null -ne $uri -and $found -notcontains $uri.AbsoluteUri) { $found+=$uri.AbsoluteUri }
+    }
+    # ReDoc uses spec-url or a literal Redoc.init() URL, as observed in the supplied screenshot.
+    foreach($pattern in @('(?i)\bspec-url\s*=\s*["''](?<url>[^"''\r\n]+)["'']','(?i)\bRedoc\.init\(\s*["''](?<url>[^"''\r\n]+)["'']')) {
+        foreach($match in [Regex]::Matches($normalized,$pattern)) {
+            $uri=Resolve-TriadeDocumentationReference -BaseUri $BaseUri -Reference $match.Groups['url'].Value -Kind json
+            if ($null -ne $uri -and $found -notcontains $uri.AbsoluteUri) { $found+=$uri.AbsoluteUri }
+        }
     }
     # Older Swashbuckle pages declare rootUrl and discoveryPaths explicitly.
     $rootMatch=[Regex]::Match($normalized,'(?i)\brootUrl\s*:\s*["''](?<root>[^"''\r\n]+)["'']')
@@ -213,6 +220,37 @@ function Get-TriadeRestrictedOpenApi {
     } finally { $client.Dispose() }
 }
 
+function New-TriadeRestrictedApiProbeRequest {
+    # Path and method are confirmed by the supplied Swagger. HTTPS is mandatory.
+    # This deliberately invalid identifier cannot refer to a real DPS and creates nothing.
+    return [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Head,[Uri]'https://sefin.producaorestrita.nfse.gov.br/SefinNacional/dps/diagnostico-local')
+}
+
+function Invoke-TriadeRestrictedApiProbe {
+    param([Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
+    $null=Get-TriadeCertificateCheck -Certificate $Certificate
+    $handler=$null;$client=$null;$request=$null;$response=$null
+    try {
+        $handler=New-TriadeRestrictedHandler -Certificate $Certificate
+        $client=[Net.Http.HttpClient]::new($handler);$client.Timeout=[TimeSpan]::FromSeconds(15)
+        $request=New-TriadeRestrictedApiProbeRequest
+        $response=$client.SendAsync($request,[Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $status=[int]$response.StatusCode
+        $message='Resposta recebida, mas ainda não confirma acesso fiscal, autorização ou existência de documento.'
+        if ($status -eq 400) { $message='HTTP 400: resposta compatível com a rejeição do identificador propositalmente inválido deste diagnóstico. Não é erro de uma nota e não autoriza emissão.' }
+        elseif ($status -eq 401 -or $status -eq 403) { $message='A API recusou a autenticação/acesso. O HTTP 200 da documentação não garantia acesso fiscal.' }
+        elseif ($status -eq 404) { $message='HTTP 404: não é possível distinguir por este teste entre rota não encontrada e identificador ausente. Precisamos conferir a publicação da API.' }
+        elseif ($status -ge 300 -and $status -lt 400) { $message='Redirecionamento recebido e bloqueado. Nenhum destino alternativo foi acessado.' }
+        return [PSCustomObject]@{ http_status=$status; failure=$null; message=$message }
+    } catch {
+        $failure=Get-TriadeConnectionFailure -Exception $_.Exception
+        return [PSCustomObject]@{ http_status=$null; failure=$failure; message=$failure.message }
+    } finally {
+        if ($null -ne $response) { $response.Dispose() };if ($null -ne $request) { $request.Dispose() }
+        if ($null -ne $client) { $client.Dispose() } elseif ($null -ne $handler) { $handler.Dispose() }
+    }
+}
+
 function Invoke-TriadeRestrictedProbe {
     param([Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
     $null = Get-TriadeCertificateCheck -Certificate $Certificate
@@ -234,4 +272,4 @@ function Invoke-TriadeRestrictedProbe {
     }
 }
 
-Export-ModuleMember -Function Get-TriadeWindowsCertificates,Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe,Get-TriadeConnectionFailure,Resolve-TriadeDocumentationReference,Find-TriadeOpenApiReferences,Get-TriadeRestrictedOpenApi,Get-TriadeDocumentationFailure
+Export-ModuleMember -Function Get-TriadeWindowsCertificates,Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe,Get-TriadeConnectionFailure,Resolve-TriadeDocumentationReference,Find-TriadeOpenApiReferences,Get-TriadeRestrictedOpenApi,Get-TriadeDocumentationFailure,New-TriadeRestrictedApiProbeRequest,Invoke-TriadeRestrictedApiProbe

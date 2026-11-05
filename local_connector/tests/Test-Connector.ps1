@@ -58,6 +58,9 @@ try {
     $html='var configObject = JSON.parse(''{"urls":[{"url":"../swagger/v1/swagger.json","name":"v1"}]}'');'
     $references=@(Find-TriadeOpenApiReferences -Text $html -BaseUri $base)
     if ($references.Count -ne 1 -or $references[0] -ne 'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/swagger/v1/swagger.json') { throw 'Referencia observada nao resolvida.' }
+    $redoc='<redoc spec-url="https://sefin.producaorestrita.nfse.gov.br/SefinNacional/docs/v1"></redoc>'
+    $redocRefs=@(Find-TriadeOpenApiReferences -Text $redoc -BaseUri $base)
+    if ($redocRefs.Count -ne 1 -or $redocRefs[0] -ne 'https://sefin.producaorestrita.nfse.gov.br/SefinNacional/docs/v1') { throw 'Referencia ReDoc nao resolvida.' }
     $legacy="rootUrl: 'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional', discoveryPaths: arrayFrom('swagger/docs/v1')"
     $legacyRefs=@(Find-TriadeOpenApiReferences -Text $legacy -BaseUri $base)
     if ($legacyRefs.Count -ne 1 -or $legacyRefs[0] -ne 'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/swagger/docs/v1') { throw 'Referencia Swagger legada nao resolvida.' }
@@ -69,6 +72,10 @@ try {
     if ($reason.code -ne 'NO_REFERENCE' -or ($reason|ConvertTo-Json) -match 'SEGREDO') { throw 'Mensagem publica de exportacao incorreta.' }
     $unknown=Get-TriadeDocumentationFailure -Exception ([Exception]::new('SEGREDO-FICTICIO'))
     if ($unknown.code -ne 'UNCLASSIFIED' -or ($unknown|ConvertTo-Json) -match 'SEGREDO') { throw 'Mensagem interna foi exposta.' }
+    $apiRequest=New-TriadeRestrictedApiProbeRequest
+    try {
+        if ($apiRequest.Method.Method -ne 'HEAD' -or $apiRequest.RequestUri.AbsoluteUri -ne 'https://sefin.producaorestrita.nfse.gov.br/SefinNacional/dps/diagnostico-local' -or $null -ne $apiRequest.Content) { throw 'Diagnostico API nao esta restrito ao HEAD sem corpo.' }
+    } finally { $apiRequest.Dispose() }
     & (Join-Path $root 'ConectorTriade.ps1') -SelfTest
     Write-Output 'PASS: parser Windows PowerShell, validade, chave privada, importacao efemera, senha incorreta e handler sem redirects. Sem rede ou certificados reais.'
 } finally {

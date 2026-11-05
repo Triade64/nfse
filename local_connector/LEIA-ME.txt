@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.5 - DIAGNOSTICO
+TRIADE NFS-e | CONECTOR LOCAL 0.6 - DIAGNOSTICO
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -22,3 +22,5 @@ Versao 0.3: carrega explicitamente System.Security, verifica loja vazia antes de
 Versao 0.4: apos selecionar certificado do Windows, use Salvar OpenAPI para salvar a documentacao de testes em JSON. A leitura segue apenas referencias da pagina oficial, no mesmo host HTTPS de producao restrita, sem executar JavaScript nem seguir redirects. O arquivo salvo nao contem o certificado, chave ou senha; contem o JSON de documentacao, origem e hash. Pode ser compartilhado para implementar a integracao. Nao e uma emissao ou consulta de dados fiscais de clientes.
 
 Versao 0.5: a falha de exportacao mostra um motivo seguro (por exemplo, NO_REFERENCE). Nenhuma mensagem arbitraria de excecao, senha, caminho ou certificado e copiada para o resultado.
+
+Versao 0.6: Testar API faz somente HEAD /dps/diagnostico-local na base HTTPS do Swagger fornecido. O identificador e intencionalmente invalido; 400 e compativel com rejeicao de formato e nao confirma autorizacao de emissao. Nao ha corpo nem POST, consulta de nota real, reenvio ou fallback para outra URL. O teste exige certificado instalado e confirmacao.

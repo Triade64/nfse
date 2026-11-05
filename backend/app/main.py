@@ -27,6 +27,7 @@ from .db import Base, engine, Session, ROOT, DATA, URL
 from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access, DPS, DpsSeries, DISCARDED, now
 from .security import current_user, db_session, hasher, role, allowed_company, company_ids, issue_session
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
+from .nbs import nbs_table, format_nbs
 from .tomador import normalize_address, complete_address, address_required
 from .dps_preview import PreviewOptions, ReserveOptions, FiscalProfile, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, SERIES_PATTERN, BRASILIA
 from argon2.exceptions import VerificationError, InvalidHashError
@@ -141,7 +142,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.8.0',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.8.1',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -431,6 +432,11 @@ def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_sessio
         raise HTTPException(422,message.removeprefix('Value error, ')+' Revise o perfil fiscal da empresa se necessário.') from None
     return reserve_core(db,u,d,b,options)
 
+@app.get('/api/nbs')
+def nbs_list(u=Depends(current_user)):
+    """Official NBS 2.0 leaf codes (Anexo B), for the optional cNBS field."""
+    return [{'code':code,'formatted':format_nbs(code),'description':desc} for code,desc in nbs_table().items()]
+
 @app.get('/api/setup')
 def setup_status(db=Depends(db_session)):
     return {'required':db.scalar(select(func.count()).select_from(User))==0,'mode':'simulation','cloud':CLOUD,'requires_token':CLOUD}
@@ -673,7 +679,7 @@ async def import_file(file:UploadFile=File(...),u=Depends(current_user),db=Depen
                 if any(v for v in row.values()):rows.append(row)
                 if len(rows)>2000:raise ValueError('Limite de 2.000 linhas')
         else:raise ValueError('Use .xlsx ou .csv UTF-8')
-        if len(heads)!=len(set(heads)) or set(heads)!=set(HEADERS):raise ValueError('Cabeçalhos incompatíveis. Baixe o modelo na aplicação e preserve todas as colunas.')
+        if len(heads)!=len(set(heads)) or set(heads) not in (set(HEADERS),set(HEADERS)-{'codigo_nbs'}):raise ValueError('Cabeçalhos incompatíveis. Baixe o modelo na aplicação e preserve todas as colunas.')
         if not rows:raise ValueError('Arquivo sem registros')
     except Exception as e:
         # No file content in errors; return known parsing messages only.
@@ -850,10 +856,10 @@ def safe_cell(value):
     return "'"+s if s.lstrip().startswith(('=','+','-','@')) else s
 
 def template_workbook():
-    wb=Workbook();ws=wb.active;ws.title='Notas';ws.append(HEADERS);ws.freeze_panes='A2';ws.auto_filter.ref='A1:M1'
+    wb=Workbook();ws=wb.active;ws.title='Notas';ws.append(HEADERS);ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
     for c in ws[1]:c.font=Font(bold=True,color='FFFFFF');c.fill=PatternFill('solid',fgColor='165B45');ws.column_dimensions[c.column_letter].width=28
     helpws=wb.create_sheet('Instrucoes')
-    for row in [ ['MODELO DE PREPARAÇÃO — SEM VALIDADE FISCAL'],['Uma linha = um rascunho. Preencha na aba Notas, sem renomear cabeçalhos.'],['CPF/CNPJ, códigos e competência devem ser texto. CNPJ alfanumérico ainda não suportado.'],['Competência: AAAA-MM-DD; código IBGE: 7 dígitos; tributação nacional: 6 dígitos.'],['ISS alíquota: percentual numérico; ISS retido: sim/nao; retenções: {} ou JSON em reais.'],['Valor: 1234,56 ou 1234.56. Não utilizar fórmulas.'],['Cadastre emitentes antes de importar. A aprovação exige conferência humana.'],['Campos são preparatórios: não abrangem todo o XSD; NBS/IBS/CBS e regras municipais serão tratados na fase 2.'],['codigo_tributacao_municipal e observacoes são opcionais; os demais campos são obrigatórios.'] ]:helpws.append(row)
+    for row in [ ['MODELO DE PREPARAÇÃO — SEM VALIDADE FISCAL'],['Uma linha = um rascunho. Preencha na aba Notas, sem renomear cabeçalhos.'],['CPF/CNPJ, códigos e competência devem ser texto. CNPJ alfanumérico ainda não suportado.'],['Competência: AAAA-MM-DD; código IBGE: 7 dígitos; tributação nacional: 6 dígitos.'],['ISS alíquota: percentual numérico; ISS retido: sim/nao; retenções: {} ou JSON em reais.'],['Valor: 1234,56 ou 1234.56. Não utilizar fórmulas.'],['Cadastre emitentes antes de importar. A aprovação exige conferência humana.'],['Campos são preparatórios: não abrangem todo o XSD; NBS/IBS/CBS e regras municipais serão tratados na fase 2.'],['codigo_tributacao_municipal, codigo_nbs e observacoes são opcionais; os demais campos são obrigatórios.'],['codigo_nbs: NBS 2.0 com 9 dígitos (ex.: 1.1302.21.00 para contabilidade), conforme Anexo B da NFS-e Nacional.'] ]:helpws.append(row)
     helpws.column_dimensions['A'].width=125
     return wb
 @app.get('/api/template.xlsx')

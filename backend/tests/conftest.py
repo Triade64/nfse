@@ -30,4 +30,4 @@ def company(admin):
 
 @pytest.fixture
 def row():
-    return {'cnpj_emitente':'11222333000181','documento_tomador':'52998224725','nome_tomador':'TOMADOR FICTÍCIO','competencia':'2026-01-10','municipio_ibge':'4205704','descricao_servico':'SERVIÇO FICTÍCIO PARA TESTES','codigo_tributacao_nacional':'010101','codigo_tributacao_municipal':'','valor_servico':'1.234,56','iss_aliquota':'2,00','iss_retido':'nao','retencoes':'{}','observacoes':'SEM VALIDADE FISCAL'}
+    return {'cnpj_emitente':'11222333000181','documento_tomador':'52998224725','nome_tomador':'TOMADOR FICTÍCIO','competencia':'2026-01-10','municipio_ibge':'4205704','descricao_servico':'SERVIÇO FICTÍCIO PARA TESTES','codigo_tributacao_nacional':'010101','codigo_tributacao_municipal':'','codigo_nbs':'','valor_servico':'1.234,56','iss_aliquota':'2,00','iss_retido':'nao','retencoes':'{}','observacoes':'SEM VALIDADE FISCAL'}

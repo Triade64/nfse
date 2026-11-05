@@ -3,9 +3,12 @@ import json
 import re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from .nbs import normalize_nbs
 
-HEADERS = ['cnpj_emitente','documento_tomador','nome_tomador','competencia','municipio_ibge','descricao_servico','codigo_tributacao_nacional','codigo_tributacao_municipal','valor_servico','iss_aliquota','iss_retido','retencoes','observacoes']
-REQUIRED = [x for x in HEADERS if x not in ['codigo_tributacao_municipal','observacoes']]
+HEADERS = ['cnpj_emitente','documento_tomador','nome_tomador','competencia','municipio_ibge','descricao_servico','codigo_tributacao_nacional','codigo_tributacao_municipal','codigo_nbs','valor_servico','iss_aliquota','iss_retido','retencoes','observacoes']
+# codigo_nbs (0.8.1) is optional; spreadsheets made with older templates may omit the column entirely.
+OPTIONAL = ['codigo_tributacao_municipal','codigo_nbs','observacoes']
+REQUIRED = [x for x in HEADERS if x not in OPTIONAL]
 
 def digits(value):
     return re.sub(r'\D', '', str(value or ''))
@@ -45,6 +48,9 @@ def normalize(raw):
     r['cnpj_emitente'] = digits(r['cnpj_emitente']) if not re.search('[A-Za-z]', r['cnpj_emitente']) else r['cnpj_emitente']
     r['documento_tomador'] = digits(r['documento_tomador']) if not re.search('[A-Za-z]', r['documento_tomador']) else r['documento_tomador']
     errors = []
+    r['codigo_nbs'], nbs_error = normalize_nbs(r['codigo_nbs'])
+    if nbs_error:
+        errors.append(nbs_error)
     for field in REQUIRED:
         if not r[field]:
             errors.append(f'{field}: preenchimento obrigatório')

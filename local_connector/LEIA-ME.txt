@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.8 - TESTE UNITARIO CONTROLADO
+TRIADE NFS-e | CONECTOR LOCAL 0.8.1 - DIAGNOSTICO POR ETAPA
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -26,7 +26,7 @@ Versao 0.5: a falha de exportacao mostra um motivo seguro (por exemplo, NO_REFER
 Versao 0.6: Testar API faz somente HEAD /dps/diagnostico-local na base HTTPS do Swagger fornecido. O identificador e intencionalmente invalido; 400 e compativel com rejeicao de formato e nao confirma autorizacao de emissao. Nao ha corpo nem POST, consulta de nota real, reenvio ou fallback para outra URL. O teste exige certificado instalado e confirmacao.
 
 
-Versao 0.8 - TESTE UNITARIO CONTROLADO, SEM ENVIO
+Versao 0.8.1 - DIAGNOSTICO POR ETAPA, SEM ENVIO
 No site, Configuracoes > Preparar DPS de teste: escolha um rascunho do proprio escritorio e confirme explicitamente suas configuracoes tributarias. Baixe a previa XML. A numeracao NAO e reservada e esse arquivo nao e nota autorizada.
 No conector, selecione o certificado instalado do escritorio e clique Conferir e assinar XML local. Escolha a previa, confira emitente/tomador/competencia/valor e confirme. Salve em arquivo NOVO. Arquivos existentes nao sao sobrescritos.
 O conector verifica o XSD restrito recebido em 20/10/2026, bloqueia tpAmb diferente de 2, exige tpEmit=1, confere o CNPJ do prestador com o OID ICP-Brasil CNPJ do SAN do certificado e assina sem exportar a chave. Certificados e-CPF e representacao de terceiros nao sao suportados nesta etapa.
@@ -49,3 +49,12 @@ A assinatura local continua separada do envio. Se ja assinou o XML na versao 0.7
 Este e um teste UNITARIO do proprio escritorio em UM PC, nao uma fila de producao ou integracao sincronizada ao site. Nao altera a situacao dos rascunhos no site, nao reserva numeracao no banco e nao coordena tentativas entre computadores. Nao repita o mesmo teste em outro computador. A integracao de fila e numeracao central sera feita antes de qualquer liberacao de lotes.
 Producao real continua bloqueada. O destino e fixo HTTPS sefin.producaorestrita.nfse.gov.br/SefinNacional. Nao ha fallback de URL, redirect ou retry automatico. O arquivo A1, a senha e a chave privada nao sao enviados ao site; o certificado publico e usado no TLS com a API oficial.
 Os testes automatizados usam transporte e retornos simulados, com certificados ficticios. A aceitacao real da assinatura e das regras tributarias ainda depende do teste confirmado pelo operador no PC. Nao foram homologados A3, e-CPF, representacao de terceiros, DANFSe, cancelamento, IBS/CBS ou cadeia/revogacao do certificado pelo conector.
+
+
+VERSAO 0.8.1 - DIAGNOSTICO DE FALHA COM ESTADO NOVO
+A versao 0.8 podia apresentar uma mensagem generica sem informar HTTP ou etapa. Isso nao permite determinar a causa apenas pelo texto exibido.
+A atualizacao mantem o MESMO historico, bloqueios e XML assinado. Nao apague arquivos, nao gere outra DPS nem troque de computador para repetir o envio.
+Depois de atualizar, selecione o certificado do escritorio e use SOMENTE Consultar resultado, escolhendo o mesmo XML assinado. A acao faz GETs; nao envia DPS.
+Em uma falha, o resultado mostra etapa, ultimo HTTP recebido quando disponivel, motivo conhecido ou UNCLASSIFIED, categoria, tipos de excecao e codigos numericos. Nao copia mensagens internas, caminhos completos, CNPJ, nome do titular ou XML.
+O diagnostico distingue se um POST pode ter sido iniciado NESTA EXECUCAO. Isso nao descarta tentativas anteriores; mantenha o historico. Compartilhe apenas o resultado do conector para analise.
+Para evitar o bloqueio de scripts baixados, use Propriedades > Desbloquear no ZIP antes de Extrair tudo. Nao altere a politica global do Windows. Se houver bloqueio corporativo, consulte a TI.

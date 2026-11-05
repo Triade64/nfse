@@ -32,3 +32,10 @@ Transporte injetado por HttpClient/HttpMessageHandler em CI Windows, com certifi
 Os testes simulados não confirmam aceitação real pela SEFIN. A validação real depende da confirmação do operador no PC com o certificado do escritório. A confirmação padrão da janela de envio é Não.
 
 Também substitui o verbo não aprovado `Sign` por `Protect` no módulo, removendo o aviso de importação relatado pelo usuário.
+
+
+## Atualização 0.8.1 — diagnóstico preservando o histórico
+
+Após o operador informar falha genérica com estado Novo, acrescentados etapa de falha, último HTTP recebido, motivo conhecido, categoria, tipos e códigos numéricos seguros. Exceções durante a leitura do corpo preservam o HTTP recebido nos metadados da exceção, sem copiar sua mensagem.
+
+A atualização não muda contrato fiscal, regras de reenvio, destino ou formato do journal. O operador deve usar somente Consultar resultado com o mesmo XML e certificado; a causa da falha informada ainda depende desse diagnóstico no PC. Testes sintéticos cobrem timeout antes/depois do POST, HTTP 404 vazio, corpo UTF-8 inválido, falha de gravação e ausência de mensagens internas/caminhos privados no diagnóstico.

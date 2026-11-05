@@ -15,15 +15,16 @@ public sealed class TriadeFakeHttp : HttpMessageHandler {
  public readonly List<string> Calls=new List<string>();
  public readonly Queue<int> Status=new Queue<int>();
  public readonly Queue<string> Body=new Queue<string>();
- public string Marker; public bool TimeoutOnPost;
+ public string Marker; public bool TimeoutOnPost; public bool TimeoutOnGet; public bool InvalidUtf8;
  protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
   string method=request.Method.Method;Calls.Add(method+" "+request.RequestUri.AbsoluteUri);
   if(request.RequestUri.Host!="sefin.producaorestrita.nfse.gov.br" || request.RequestUri.Scheme!="https" || request.RequestUri.Port!=443)throw new Exception("URL_UNSAFE");
+  if(method=="GET" && TimeoutOnGet)throw new TaskCanceledException("SEGREDO-FICTICIO-NAO-COPIAR");
   if(method=="POST"){
    if(!System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(Marker),"\"attempted\"\\s*:\\s*true"))throw new Exception("MARKER_NOT_DURABLE_BEFORE_POST");
    if(TimeoutOnPost)throw new TaskCanceledException("FICTICIO-SEM-SEGREDO");
   }
-  HttpResponseMessage response=new HttpResponseMessage((HttpStatusCode)Status.Dequeue());response.Content=new StringContent(Body.Dequeue());return Task.FromResult(response);
+  HttpResponseMessage response=new HttpResponseMessage((HttpStatusCode)Status.Dequeue());string body=Body.Dequeue();response.Content=InvalidUtf8?(HttpContent)new ByteArrayContent(new byte[]{195,40}):new StringContent(body);return Task.FromResult(response);
  }
 }
 '@
@@ -66,6 +67,21 @@ try{
  $case=New-FakeClient 'somente-consulta' @(404) @($missing);$clients+=$case
  $result=Invoke-Case $case $false
  if($result.attempted -or $case.handler.Calls.Count -ne 1 -or $case.handler.Calls[0] -notmatch '^GET '){throw 'Consulta fez POST.'}
+ $case=New-FakeClient 'timeout-consulta' @() @();$clients+=$case;$case.handler.TimeoutOnGet=$true
+ $result=Invoke-Case $case $false
+ if($result.state -ne 'Novo' -or $result.diagnostic.stage -ne 'CONSULTAR_DPS' -or $result.diagnostic.category -ne 'timeout' -or $result.diagnostic.post_possible_this_run -or $result.http_status -ne 0){throw 'Timeout de consulta nao foi identificado.'}
+ if(($result|ConvertTo-Json -Depth 5) -match 'SEGREDO|PRIVATE|CNPJ'){throw 'Diagnostico expoe mensagem interna.'}
+ $case=New-FakeClient 'utf8-invalido' @(404) @('');$clients+=$case;$case.handler.InvalidUtf8=$true
+ $result=Invoke-Case $case $false
+ if($result.http_status -ne 404 -or $result.diagnostic.stage -ne 'CONSULTAR_DPS' -or $result.diagnostic.post_possible_this_run){throw 'Falha ao ler corpo perdeu HTTP recebido.'}
+ $case=New-FakeClient '404-vazio' @(404) @('');$clients+=$case
+ $result=Invoke-Case $case $false
+ if($result.http_status -ne 404 -or $result.diagnostic.stage -ne 'VALIDAR_CONSULTA' -or $result.diagnostic.reason -ne 'RESPONSE_FORMAT' -or $result.diagnostic.post_possible_this_run){throw 'HTTP 404 vazio perdeu o diagnostico.'}
+ $case=New-FakeClient 'gravacao-consulta' @(404) @($missing);$clients+=$case
+ $null=[IO.Directory]::CreateDirectory((Join-Path (Join-Path $case.root $review.identifier) 'ultima-consulta.json'))
+ $result=Invoke-Case $case $false
+ if($result.http_status -ne 404 -or $result.diagnostic.stage -ne 'GRAVAR_CONSULTA' -or $result.diagnostic.post_possible_this_run){throw 'Falha de gravacao perdeu etapa e HTTP.'}
+ if(($result|ConvertTo-Json -Depth 5).Contains($case.root)){throw 'Diagnostico expoe caminho privado.'}
  $case=New-FakeClient 'sucesso' @(404,201,404) @($missing,$success,$missing);$clients+=$case
  $result=Invoke-Case $case $true
  if($result.state -ne 'Autorizada em teste' -or $result.http_status -ne 201){throw ('Resposta 201 valida nao reconhecida. '+($result|ConvertTo-Json -Compress)+' Calls: '+($case.handler.Calls -join ';')+' Files: '+((Get-ChildItem -LiteralPath (Join-Path $case.root $review.identifier)).Name -join ','))}
@@ -75,7 +91,7 @@ try{
  if(-not $state.attempted -or $state.nfse_sha256.Length -ne 64){throw 'Resultado nao persistido.'}
  $case=New-FakeClient 'timeout' @(404,404,200,200) @($missing,$missing,$found,$success);$clients+=$case;$case.handler.TimeoutOnPost=$true
  $result=Invoke-Case $case $true
- if($result.state -ne 'Situação desconhecida; consultar'){throw 'Timeout nao manteve estado desconhecido.'}
+ if($result.state -ne 'Situação desconhecida; consultar' -or $result.diagnostic.stage -ne 'ENVIAR_DPS' -or -not $result.diagnostic.post_possible_this_run){throw 'Timeout nao manteve estado e etapa desconhecidos.'}
  $result=Invoke-Case $case $true
  if(@($case.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 1 -or $result.http_status -ne 404){throw 'Timeout foi reenviado.'}
  $result=Invoke-Case $case $false
@@ -116,5 +132,6 @@ try{
  if(-not $blocked){throw 'GZip excessivo nao bloqueado.'}
  $warnings=@();Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'TriadeDps.psm1') -Force -WarningVariable warnings
  if($warnings.Count -ne 0){throw 'Aviso de verbo nao aprovado permanece.'}
+ Write-Output 'PASS: diagnostico seguro de timeout antes e depois do POST, HTTP 404 vazio e falha de gravacao, sem mensagem interna ou caminho privado.'
  Write-Output 'PASS: transporte simulado, confirmacao, journal antes do POST, 201/400/500, timeout, consulta sem reenvio, ambiente incorreto, redirect, GZip e verbos aprovados. Nenhuma chamada fiscal real.'
 }finally{foreach($item in $clients){$item.client.Dispose()}}

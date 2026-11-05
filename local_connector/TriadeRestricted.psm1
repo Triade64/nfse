@@ -81,6 +81,9 @@ function Invoke-TriadeFiscalHttp {
    $memory.Write($buffer,0,$count)
   }
   return [PSCustomObject]@{status=[int]$response.StatusCode;text=[Text.UTF8Encoding]::new($false,$true).GetString($memory.ToArray())}
+ }catch{
+  if($null -ne $response){$_.Exception.Data['TriadeHttpStatus']=[int]$response.StatusCode}
+  throw
  }finally{if($null -ne $stream){$stream.Dispose()};if($null -ne $response){$response.Dispose()};$memory.Dispose();$cancel.Dispose();$Request.Dispose()}
 }
 function Read-TriadeFiscalJson {
@@ -120,6 +123,20 @@ function Save-TriadeReturnedNfse {
  if($dps.SelectSingleNode('n:prest/n:CNPJ',$ns).InnerText -ne $Review.cnpj -or $dps.SelectSingleNode('n:dCompet',$ns).InnerText -ne $Review.competence -or $dps.SelectSingleNode('n:valores/n:vServPrest/n:vServ',$ns).InnerText -ne $Review.amount){throw 'RESPONSE_ID'}
  return Get-TriadeXmlHash -Bytes $bytes
 }
+function Get-TriadeRestrictedFailureInfo {
+ param([Exception]$Exception,[int]$LastHttp)
+ $failure=Get-TriadeConnectionFailure -Exception $Exception
+ $reason='UNCLASSIFIED';$cursor=$Exception
+ $allowed=@('JOURNAL_INVALID','JOURNAL_CONFLICT','RESPONSE_FORMAT','RESPONSE_ENVIRONMENT','RESPONSE_ID','HTTP_SIZE','XML_SIZE','ENVELOPE_SIZE','NFSE_RECOVERY_PENDING','FILE_EXISTS')
+ for($i=0;$i -lt 8 -and $null -ne $cursor;$i++){
+  if($allowed -ccontains $cursor.Message){$reason=$cursor.Message}
+  if($cursor.Data.Contains('TriadeHttpStatus')){
+   $status=$cursor.Data['TriadeHttpStatus'];if($status -is [int] -and $status -ge 100 -and $status -le 599){$LastHttp=$status}
+  }
+  $cursor=$cursor.InnerException
+ }
+ return [PSCustomObject]@{reason=$reason;http_status=$LastHttp;category=$failure.category;codes=$failure.codes;types=$failure.types}
+}
 function Get-TriadeRestrictedResult {
  param($State,[string]$Message,[int]$HttpStatus=0,[string]$ErrorCodes='')
  return [PSCustomObject]@{state=$State.status;attempted=[bool]$State.attempted;http_status=$HttpStatus;codes=$ErrorCodes;message=$Message}
@@ -131,6 +148,7 @@ function Invoke-TriadeSingleRestrictedDps {
  $directory=Join-Path $JournalRoot $review.identifier
  $null=[IO.Directory]::CreateDirectory($directory)
  $lock=$null;$state=$null;$statePath=Join-Path $directory 'estado.json'
+ $phase='ABRIR_HISTORICO';$lastHttp=0;$postPossible=$false
  try{
   $lock=[IO.File]::Open((Join-Path $directory 'processamento.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
   if([IO.File]::Exists($statePath)){
@@ -148,17 +166,23 @@ function Invoke-TriadeSingleRestrictedDps {
    }else{Write-TriadeDurableFile -Path $xmlPath -Bytes $Bytes}
    Save-TriadeRestrictedState -Path $statePath -State $state
   }
+  $phase='CONSULTAR_DPS'
   # Always reconcile, including after a previous timeout or a process crash.
   $lookup=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation GET_DPS -Identifier $review.identifier)
+  $lastHttp=$lookup.status;$phase='GRAVAR_CONSULTA'
   Write-TriadeDurableFile -Path (Join-Path $directory 'ultima-consulta.json') -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($lookup.text)) -Replace
+  $phase='VALIDAR_CONSULTA'
   if($lookup.status -eq 200){
    $found=Read-TriadeFiscalJson -Response $lookup
    if($found.idDps -ne $review.identifier -or $found.chaveAcesso -notmatch '^[0-9]{50}$'){throw 'RESPONSE_ID'}
    $state.status='Localizada; documento pendente';$state.attempted=$true;$state.access_key=$found.chaveAcesso
    Save-TriadeRestrictedState -Path $statePath -State $state
+   $phase='CONSULTAR_NFSE'
    $nfse=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation GET_NFSE -Identifier $found.chaveAcesso)
+   $lastHttp=$nfse.status;$phase='GRAVAR_CONSULTA_NFSE'
    Write-TriadeDurableFile -Path (Join-Path $directory 'resposta-consulta-nfse.json') -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($nfse.text)) -Replace
    if($nfse.status -ne 200){throw 'NFSE_RECOVERY_PENDING'}
+   $phase='VALIDAR_NFSE'
    $body=Read-TriadeFiscalJson -Response $nfse
    $state.nfse_sha256=Save-TriadeReturnedNfse -Body $body -Identifier $review.identifier -Key $found.chaveAcesso -Directory $directory -SchemaDirectory $SchemaDirectory -Review $review
    $state.status='Autorizada em teste';Save-TriadeRestrictedState -Path $statePath -State $state
@@ -169,14 +193,19 @@ function Invoke-TriadeSingleRestrictedDps {
   if($null -eq $notFound.erro){throw 'RESPONSE_FORMAT'}
   if($state.attempted){return Get-TriadeRestrictedResult -State $state -Message 'Consulta retornou 404, mas existe tentativa anterior registrada. Reenvio bloqueado; o resultado anterior precisa ser reconciliado.' -HttpStatus 404}
   if(-not $ConfirmRestrictedSend){return Get-TriadeRestrictedResult -State $state -Message 'Consulta retornou 404. Nenhuma tentativa de envio registrada neste PC e nenhum POST realizado.' -HttpStatus 404}
+  $phase='PREPARAR_ENVIO'
   $post=New-TriadeFiscalRequest -Operation POST_DPS -Xml $Bytes
   try{
    # Fail closed: this durable marker MUST precede SendAsync. Never reset it after failure.
+   $phase='GRAVAR_MARCADOR'
    $state.attempted=$true;$state.status='Situação desconhecida; consultar'
    Save-TriadeRestrictedState -Path $statePath -State $state
+   $phase='ENVIAR_DPS';$postPossible=$true;$lastHttp=0
    $response=Invoke-TriadeFiscalHttp -Client $Client -Request $post
   }finally{$post.Dispose()}
+  $lastHttp=$response.status;$phase='GRAVAR_RESPOSTA'
   Write-TriadeDurableFile -Path (Join-Path $directory 'resposta-envio.json') -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($response.text)) -Replace
+  $phase='VALIDAR_RESPOSTA'
   if($response.status -eq 201){
    $body=Read-TriadeFiscalJson -Response $response
    if($body.idDps -ne $review.identifier){throw 'RESPONSE_ID'}
@@ -197,7 +226,10 @@ function Invoke-TriadeSingleRestrictedDps {
  }catch{
   if($null -eq $state){throw}
   # Do not guess whether the request reached the server. The pre-send marker survives exceptions.
-  return Get-TriadeRestrictedResult -State $state -Message 'Não foi possível concluir a operação ou preservar/conferir o retorno. Consulte o resultado; não apague o histórico e não repita o envio.'
+  $failure=Get-TriadeRestrictedFailureInfo -Exception $_.Exception -LastHttp $lastHttp
+  $result=Get-TriadeRestrictedResult -State $state -HttpStatus $failure.http_status -Message 'Não foi possível concluir a operação. O diagnóstico abaixo identifica a etapa; não apague o histórico nem repita o envio.'
+  $result|Add-Member -NotePropertyName diagnostic -NotePropertyValue ([PSCustomObject]@{stage=$phase;reason=$failure.reason;category=$failure.category;codes=$failure.codes;types=$failure.types;post_possible_this_run=$postPossible})
+  return $result
  }finally{if($null -ne $lock){$lock.Dispose()}}
 }
 Export-ModuleMember -Function ConvertTo-TriadeDpsEnvelope,ConvertFrom-TriadeXmlEnvelope,New-TriadeFiscalRequest,Invoke-TriadeSingleRestrictedDps

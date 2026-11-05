@@ -146,3 +146,35 @@ def test_cpf_customer_address_is_optional_but_sent_when_complete(admin,company,r
     r=emit(admin,n);assert r.status_code==200,r.text
     end=etree.fromstring(admin.get(f'/api/dps/{r.json()["id"]}/xml').content).find('.//{*}toma/{*}end')
     assert end is not None and end.find('{*}xCpl') is None
+
+def test_optional_nbs_is_validated_normalized_and_sent(admin,company,row):
+    from app.dps_preview import SCHEMA_DIR
+    set_profile(admin,company)
+    admin.put(f'/api/companies/{company["id"]}/dps-series',json={'series':'1','next_number':1,'expected_revision':None,'confirm_unused':True})
+    bad=note(admin,{**row,'codigo_nbs':'1.1302.99.99'})
+    assert bad['situation']=='Com inconsistência' and any('E0316' in e for e in bad['errors'])
+    short=note(admin,{**row,'documento_tomador':'11144477735','codigo_nbs':'1.1302.21'})
+    assert any('9 dígitos' in e for e in short['errors'])
+    n=note(admin,{**row,'nome_tomador':'OUTRO','documento_tomador':'39053344705','codigo_nbs':'1.1302.21.00'})
+    assert n['situation']=='Pronta' and n['raw']['codigo_nbs']=='113022100'
+    r=emit(admin,n);assert r.status_code==200,r.text
+    xml=etree.fromstring(admin.get(f'/api/dps/{r.json()["id"]}/xml').content)
+    cserv=xml.find('.//{*}cServ')
+    assert [c.tag.split('}')[1] for c in cserv]==['cTribNac','cNBS','xDescServ'] and cserv.find('{*}cNBS').text=='113022100'
+    etree.XMLSchema(etree.parse(str(SCHEMA_DIR/'DPS_v1.01.xsd'))).assertValid(xml)
+
+def test_nbs_is_optional_and_absent_from_xml_when_empty(admin,company,row):
+    set_profile(admin,company)
+    admin.put(f'/api/companies/{company["id"]}/dps-series',json={'series':'1','next_number':1,'expected_revision':None,'confirm_unused':True})
+    n=note(admin,row);assert n['situation']=='Pronta'
+    r=emit(admin,n);assert r.status_code==200
+    assert etree.fromstring(admin.get(f'/api/dps/{r.json()["id"]}/xml').content).find('.//{*}cNBS') is None
+
+def test_nbs_list_endpoint_and_old_template_without_nbs_column(admin,company,row):
+    codes={x['code']:x for x in admin.get('/api/nbs').json()}
+    assert codes['113022100']['formatted']=='1.1302.21.00' and 'contabilidade' in codes['113022100']['description']
+    import csv,io as _io
+    old=[h for h in row if h!='codigo_nbs']
+    buf=_io.StringIO();w=csv.DictWriter(buf,fieldnames=old,delimiter=';');w.writeheader();w.writerow({k:row[k] for k in old})
+    r=admin.post('/api/import',files={'file':('antigo.csv',buf.getvalue().encode('utf-8'),'text/csv')})
+    assert r.status_code==200,r.text

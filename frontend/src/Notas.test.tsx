@@ -61,3 +61,25 @@ it('hides Emitir and explains E0235 when a CNPJ customer has no address',async()
  expect(screen.queryByRole('button',{name:/Emitir/})).toBeNull();
  expect(screen.getByText(/E0235/)).toBeTruthy();
 });
+
+it('new note offers the official NBS list and the accounting suggestion for 171901',async()=>{
+ const api=vi.fn(async(path:string,method?:string,body?:any)=>{
+  if(path==='/notes')return [];
+  if(path==='/nbs')return [{code:'113022100',formatted:'1.1302.21.00',description:'Serviços de contabilidade'}];
+  if(path==='/batches'&&method==='POST')return {id:1,body};
+  throw new Error('inesperado '+path);
+ });
+ render(<Notas api={api} companies={companies} customers={[]} services={[]} role="operator"/>);
+ fireEvent.click(await screen.findByRole('button',{name:/Nova nota/}));
+ const dialog=screen.getByRole('dialog');
+ await waitFor(()=>expect(api).toHaveBeenCalledWith('/nbs'));
+ fireEvent.change(within(dialog).getByLabelText('Código tributação nacional'),{target:{value:'171901'}});
+ fireEvent.click(within(dialog).getByRole('button',{name:/Usar 1.1302.21.00/}));
+ const nbs=within(dialog).getByLabelText(/Código NBS/) as HTMLInputElement;
+ expect(nbs.value).toBe('1.1302.21.00 — Serviços de contabilidade');
+ for(const [label,value] of Object.entries({'CPF / CNPJ do tomador':'52998224725','Nome do tomador':'CLIENTE','Competência':'2026-10-01','Descrição do serviço':'HONORARIOS','Valor (R$)':'10,00','Alíquota ISS (%)':'2'}))fireEvent.change(within(dialog).getByLabelText(label),{target:{value}});
+ fireEvent.submit(within(dialog).getByRole('button',{name:/Salvar nota/}).closest('form')!);
+ await waitFor(()=>expect(api).toHaveBeenCalledWith('/batches','POST',expect.anything()));
+ const sent=api.mock.calls.find(c=>c[0]==='/batches')![2];
+ expect(sent.rows[0].codigo_nbs).toBe('1.1302.21.00');
+});

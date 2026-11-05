@@ -58,4 +58,14 @@ Pendências antes de implementar o item 3: ler a NT 009 e a tabela de CST/cClass
 - **Bloqueio:** um tomador com CNPJ sem endereço completo não é emitido (422 com a referência E0235), e o número da DPS **não** é consumido. A tela Notas mostra o aviso na linha e esconde o "Emitir" até o cadastro ser completado.
 - **Testes:** backend com 74 de 74 aprovados (validação e normalização do cadastro, bloqueio E0235 sem consumir número, XML válido no XSD com a ordem dos campos, CPF com endereço opcional); frontend com 18 de 18 aprovados; no navegador local, salvar o cadastro incompleto mostrou "Endereço incompleto: informe Bairro, Município (IBGE)", e o cadastro completo liberou a emissão.
 
-Próximo item: NBS opcional no cadastro de serviços e na nota.
+
+**Validação na SEFIN (05/11/2026):** a DPS série 1 nº 4, para tomador **CNPJ com endereço**, foi autorizada como NFS-e nº 2 (cStat 100), com o `toma/end/endNac` presente na nota devolvida.
+
+## Implementado na versão 0.8.1: NBS opcional
+
+- **Tabela oficial:** `backend/app/data/nbs.json`, com 917 códigos de último nível da NBS 2.0 (9 dígitos, tipo `TSCodNBS`). É gerada a partir do Anexo B por `scripts/build_nbs.py`. Para atualizar quando sair um novo Anexo B, rode o script com o arquivo novo.
+- **Nota:** novo campo opcional `codigo_nbs`. Aceita `1.1302.21.00` ou `113022100` e grava só os 9 dígitos. Fica inconsistente se tiver menos de 9 dígitos ou não existir na lista (E0316). Só é enviado no XML (`cServ/cNBS`, entre `cTribMun` e `xDescServ`) quando preenchido.
+- **Cadastro de serviços:** campo "Código NBS". O modelo de serviço preenche a nota.
+- **Tela Notas:** busca pelo código ou pela descrição na lista oficial. Para o 171901 vazio, oferece "Usar 1.1302.21.00 (Serviços de contabilidade)", como sugestão e nunca automaticamente.
+- **Planilha:** o modelo ganhou a coluna `codigo_nbs`. Planilhas antigas, sem a coluna, continuam aceitas.
+- **Testes:** backend com 77 de 77 aprovados (código inexistente, código curto, normalização, ordem e XSD do `cServ`, ausência quando vazio, endpoint da lista e planilha antiga); frontend com 19 de 19 aprovados. No navegador local, o modelo de serviço preencheu "1.1302.21.00 — Serviços de contabilidade" e a busca oferece os 917 códigos.

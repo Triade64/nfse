@@ -6,9 +6,10 @@ type Api=(path:string,method?:string,data?:any)=>Promise<any>;
 export type Note={id:number;batch_id:number;batch_revision:number;company_id:number|null;raw:Record<string,string>;errors:string[];amount_cents:number;situation:string;dps:Data|null;editable:boolean;address_missing?:boolean};
 
 const money=(c:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((c||0)/100);
+const fmtNbs=(d:string)=>/^\d{9}$/.test(d)?`${d[0]}.${d.slice(1,5)}.${d.slice(5,7)}.${d.slice(7)}`:d;
 const dateBR=(iso:string)=>iso?iso.split('-').reverse().join('/'):'—';
 const tone=(s:string)=>s==='Pronta'?'green':s==='Com inconsistência'?'red':s.startsWith('DPS')?'blue':'orange';
-const blank=():Record<string,string>=>({cnpj_emitente:'',documento_tomador:'',nome_tomador:'',competencia:'',municipio_ibge:'',descricao_servico:'',codigo_tributacao_nacional:'',codigo_tributacao_municipal:'',valor_servico:'',iss_aliquota:'',iss_retido:'nao',retencoes:'{}',observacoes:''});
+const blank=():Record<string,string>=>({cnpj_emitente:'',documento_tomador:'',nome_tomador:'',competencia:'',municipio_ibge:'',descricao_servico:'',codigo_tributacao_nacional:'',codigo_tributacao_municipal:'',codigo_nbs:'',valor_servico:'',iss_aliquota:'',iss_retido:'nao',retencoes:'{}',observacoes:''});
 const SITUATIONS=['Pronta','Com inconsistência','Rascunho','DPS reservada'];
 
 function Dialog({title,close,children}:{title:string;close:()=>void;children:React.ReactNode}){
@@ -22,7 +23,8 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
  const [dup,setDup]=useState<Note[]|null>(null),[dupDate,setDupDate]=useState(''),[dupOk,setDupOk]=useState(false),[requestId,setRequestId]=useState(()=>crypto.randomUUID());
  const [emitting,setEmitting]=useState<Note|null>(null),[emitOk,setEmitOk]=useState(false),[percent,setPercent]=useState('');
  const [discarding,setDiscarding]=useState<Note|null>(null),[reason,setReason]=useState(''),[discardOk,setDiscardOk]=useState(false);
- const [editing,setEditing]=useState<{note?:Note;raw:Record<string,string>}|null>(null);
+ const [editing,setEditing]=useState<{note?:Note;raw:Record<string,string>}|null>(null),[nbs,setNbs]=useState<Data[]>([]);
+ useEffect(()=>{if(editing&&!nbs.length)api('/nbs').then(setNbs).catch(()=>{/* the field still accepts a typed code */})},[editing]);
  const canEdit=['admin','operator','approver'].includes(role),isAdmin=role==='admin';
  const companyOf=(id:number|null|undefined)=>companies.find(c=>c.id===id);
 
@@ -43,6 +45,7 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
   else await api('/batches','POST',{name:(editing.raw.nome_tomador||'Nota')+' · '+editing.raw.competencia,rows:[editing.raw]});
   setEditing(null);await load();setNotice('Nota salva e validada.')})}
 
+ function nbsLabel(v:string){if(!v)return '';const f=fmtNbs(v.replace(/\D/g,'').length===9?v.replace(/\D/g,''):v);const hit=nbs.find(x=>x.formatted===f);return hit?f+' — '+hit.description:v}
  function field(key:string,value:string){setEditing(ed=>ed&&({...ed,raw:{...ed.raw,[key]:value}}))}
  function chooseCompany(id:string){const c=companies.find(c=>String(c.id)===id);setEditing(ed=>ed&&({...ed,raw:{...ed.raw,cnpj_emitente:c?.cnpj||'',municipio_ibge:ed.raw.municipio_ibge||c?.config.municipio_ibge||'',documento_tomador:'',nome_tomador:''}}))}
  const editCompany=editing?companies.find(c=>c.cnpj===editing.raw.cnpj_emitente):undefined;
@@ -61,7 +64,7 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
   <div className="tableWrap"><table><thead><tr><th><input type="checkbox" aria-label="Selecionar todas as notas visíveis" checked={visible.length>0&&visible.every(n=>checked.includes(n.id))} onChange={e=>setChecked(e.target.checked?visible.map(n=>n.id):[])}/></th><th>Tomador / serviço</th><th>Empresa</th><th>Competência</th><th>Valor</th><th>Situação</th><th>Ações</th></tr></thead>
   <tbody>{visible.map(n=><tr key={n.id}>
    <td><input type="checkbox" aria-label={'Selecionar '+n.raw.nome_tomador} checked={checked.includes(n.id)} onChange={e=>setChecked(prev=>e.target.checked?[...prev,n.id]:prev.filter(id=>id!==n.id))}/></td>
-   <td><strong>{n.raw.nome_tomador||'Tomador não informado'}</strong><small>{n.raw.descricao_servico}</small></td>
+   <td><strong>{n.raw.nome_tomador||'Tomador não informado'}</strong><small>{n.raw.descricao_servico}</small>{n.raw.codigo_nbs&&<small>NBS {fmtNbs(n.raw.codigo_nbs)}</small>}</td>
    <td>{companyOf(n.company_id)?.name||n.raw.cnpj_emitente}</td><td>{dateBR(n.raw.competencia)}</td><td>{money(n.amount_cents)}</td>
    <td><span className={'badge '+tone(n.situation)}>{n.situation}</span>{n.dps&&<small>Série {n.dps.series} · nº {n.dps.number}</small>}{n.errors.map(s=><small className="rowError" key={s}>{s}</small>)}{n.address_missing&&!n.dps&&<small className="rowError">Tomador com CNPJ sem endereço completo (E0235). Complete em Tomadores antes de emitir.</small>}</td>
    <td><div className="entryActions">
@@ -103,12 +106,13 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
    <label>Tomador cadastrado<select value={customers.find(t=>t.company_id===editCompany?.id&&t.document===editing.raw.documento_tomador)?.id||''} onChange={e=>{const t=customers.find(t=>String(t.id)===e.target.value);if(t){field('documento_tomador',t.document);field('nome_tomador',t.name)}}}><option value="">Preencher manualmente</option>{customers.filter(t=>t.company_id===editCompany?.id).map(t=><option key={t.id} value={t.id}>{t.name} · {t.document}</option>)}</select></label>
    <label>CPF / CNPJ do tomador<input required value={editing.raw.documento_tomador} onChange={e=>field('documento_tomador',e.target.value)}/></label>
    <label>Nome do tomador<input required value={editing.raw.nome_tomador} onChange={e=>field('nome_tomador',e.target.value)}/></label>
-   <label>Modelo de serviço<select value="" onChange={e=>{const s=services.find(s=>String(s.id)===e.target.value);if(s)setEditing(ed=>ed&&({...ed,raw:{...ed.raw,descricao_servico:s.config.descricao||s.name,codigo_tributacao_nacional:s.config.codigo_tributacao_nacional||'',codigo_tributacao_municipal:s.config.codigo_tributacao_municipal||'',valor_servico:s.config.valor_habitual||ed.raw.valor_servico}}))}}><option value="">Usar modelo cadastrado</option>{services.filter(s=>s.company_id===editCompany?.id).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+   <label>Modelo de serviço<select value="" onChange={e=>{const s=services.find(s=>String(s.id)===e.target.value);if(s)setEditing(ed=>ed&&({...ed,raw:{...ed.raw,descricao_servico:s.config.descricao||s.name,codigo_tributacao_nacional:s.config.codigo_tributacao_nacional||'',codigo_tributacao_municipal:s.config.codigo_tributacao_municipal||'',codigo_nbs:s.config.codigo_nbs||ed.raw.codigo_nbs||'',valor_servico:s.config.valor_habitual||ed.raw.valor_servico}}))}}><option value="">Usar modelo cadastrado</option>{services.filter(s=>s.company_id===editCompany?.id).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
    <label>Competência<input required type="date" value={editing.raw.competencia} onChange={e=>field('competencia',e.target.value)}/></label>
    <label className="wide">Descrição do serviço<textarea required value={editing.raw.descricao_servico} onChange={e=>field('descricao_servico',e.target.value)}/></label>
    <label>Valor (R$)<input required inputMode="decimal" value={editing.raw.valor_servico} onChange={e=>field('valor_servico',e.target.value)}/></label>
    <label>Código tributação nacional<input required value={editing.raw.codigo_tributacao_nacional} onChange={e=>field('codigo_tributacao_nacional',e.target.value)}/></label>
    <label>Código tributação municipal (opcional)<input value={editing.raw.codigo_tributacao_municipal} onChange={e=>field('codigo_tributacao_municipal',e.target.value)}/></label>
+   <label>Código NBS (opcional)<input list="nbs-oficial" placeholder="Ex.: 1.1302.21.00 — busque pelo código ou descrição" value={nbsLabel(editing.raw.codigo_nbs)} onChange={e=>field('codigo_nbs',e.target.value.split(' — ')[0])}/><datalist id="nbs-oficial">{nbs.map(x=><option key={x.code} value={x.formatted+' — '+x.description}/>)}</datalist>{editing.raw.codigo_tributacao_nacional==='171901'&&!editing.raw.codigo_nbs&&<button type="button" className="textBtn" onClick={()=>field('codigo_nbs','1.1302.21.00')}>Usar 1.1302.21.00 (Serviços de contabilidade)</button>}<small>Lista NBS 2.0 do Anexo B. Exigido quando houver IBS/CBS ou exportação.</small></label>
    <label>Município da prestação (IBGE)<input required value={editing.raw.municipio_ibge} onChange={e=>field('municipio_ibge',e.target.value)}/></label>
    <label>Alíquota ISS (%)<input required inputMode="decimal" value={editing.raw.iss_aliquota} onChange={e=>field('iss_aliquota',e.target.value)}/></label>
    <label>ISS retido<select value={editing.raw.iss_retido} onChange={e=>field('iss_retido',e.target.value)}><option value="nao">Não</option><option value="sim">Sim</option></select></label>

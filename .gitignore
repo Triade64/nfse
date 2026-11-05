@@ -7,7 +7,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
-data/
+/data/
 public/
 frontend/dist/
 .vercel/

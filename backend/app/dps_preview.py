@@ -163,6 +163,7 @@ def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj
     serv=add(info,'serv'); add(add(serv,'locPrest'),'cLocPrestacao',row['municipio_ibge'])
     code=add(serv,'cServ'); add(code,'cTribNac',row['codigo_tributacao_nacional'])
     if row['codigo_tributacao_municipal']:add(code,'cTribMun',row['codigo_tributacao_municipal'])
+    if row['codigo_nbs']:add(code,'cNBS',row['codigo_nbs'])
     add(code,'xDescServ',row['descricao_servico'])
     if row['observacoes']:add(add(serv,'infoCompl'),'xInfComp',row['observacoes'])
     values=add(info,'valores');add(add(values,'vServPrest'),'vServ',row['valor_servico'])

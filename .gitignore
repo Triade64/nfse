@@ -15,3 +15,6 @@ frontend/dist/
 *.pem
 *.pfx
 *.p12
+
+# Documento fiscal real (dados de cliente): nunca versionar
+docs/official/4205704*.pdf

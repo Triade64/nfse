@@ -89,12 +89,14 @@ class DpsSeries(Base):
 class DPS(Base):
     __tablename__ = 'dps'
     # A draft may keep discarded reservations, but only one active (non-discarded) DPS. Numbers are never reused.
+    # 0.10.0: the DPS Id carries no environment, so the same series/number exists once per environment.
     __table_args__ = (UniqueConstraint('company_id', 'environment', 'series', 'number', name='uq_dps_number'),
+                      UniqueConstraint('environment', 'identifier', name='uq_dps_environment_identifier'),
                       Index('uq_dps_active_draft', 'draft_id', unique=True, sqlite_where=text(ACTIVE_DPS), postgresql_where=text(ACTIVE_DPS)))
     id: Mapped[int] = mapped_column(primary_key=True)
     draft_id: Mapped[int] = mapped_column(ForeignKey('drafts.id'))
     environment: Mapped[str] = mapped_column(String(20))
-    identifier: Mapped[str] = mapped_column(String(80), unique=True)
+    identifier: Mapped[str] = mapped_column(String(80))
     xml_path: Mapped[str | None] = mapped_column(nullable=True)
     xml_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Columns added in 0.6.0 (nullable for an additive migration of the existing table).

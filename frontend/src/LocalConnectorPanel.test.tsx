@@ -9,5 +9,5 @@ it('offers a local download without file or password collection',()=>{
  expect(container.querySelector('input[type="file"]')).toBeNull();
  expect(container.querySelector('input[type="password"]')).toBeNull();
  expect(container.textContent).toContain('Ativar_Abertura_pelo_Site.cmd');
- expect(container.textContent).toContain('Produção real continua bloqueada');
+ expect(container.textContent).toContain('duas confirmações no conector');
 });

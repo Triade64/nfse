@@ -1,4 +1,6 @@
-"""Restricted-environment DPS builder. No signing or submission: the XML is signed and sent by the local connector."""
+"""DPS builder for the restricted (tpAmb 2) and production (tpAmb 1) environments.
+No signing or submission: the XML is signed and sent by the local connector."""
+from functools import lru_cache
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -8,13 +10,20 @@ import re
 from lxml import etree
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .validation import normalize
-from .fiscal import validate_xml
 from .tomador import address_required
 
 NS = 'http://www.sped.fazenda.gov.br/nfse'
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / 'schemas' / 'restricted-20261020'
+PRODUCTION_SCHEMA_DIR = Path(__file__).resolve().parents[2] / 'schemas' / 'production-20260209'
+RESTRICTED, PRODUCTION = '2', '1'
+# Each environment runs its own published layout. Production keeps the 2026-02-09 layout (finNFSe inside IBSCBS,
+# xDescServ before cNBS); the 2026-10-20 layout (NT 009) is deployed only in the restricted environment so far.
+SCHEMA_DIRS = {RESTRICTED: SCHEMA_DIR, PRODUCTION: PRODUCTION_SCHEMA_DIR}
+ENVIRONMENT_NAMES = {RESTRICTED: 'produção restrita (testes)', PRODUCTION: 'produção (validade jurídica)'}
 
-SERIES_PATTERN = r'^[0-9]{1,4}$|^[0-8][0-9]{4}$'
+# Rule E0010: series 00001-49999 are reserved for the contributor's own application (50000+ belong to the
+# government emitters: mobile, web and manual transcription). Same range in both environments.
+SERIES_PATTERN = r'^0{0,4}([1-9][0-9]{0,3}|[1-4][0-9]{4})$'
 BRASILIA = timezone(timedelta(hours=-3))
 
 class FiscalChoices(BaseModel):
@@ -111,9 +120,37 @@ def check_instant(issued_at: datetime):
         raise ValueError('A data/hora de emissão não pode ser futura. Confira o horário de Brasília.')
 
 def normalize_series(series: str) -> str:
-    if not re.fullmatch(SERIES_PATTERN, series):
-        raise ValueError('Série inválida.')
+    if not re.fullmatch(SERIES_PATTERN, series or ''):
+        raise ValueError('Série inválida: use de 1 a 49999, faixa do aplicativo próprio (regra E0010). 50000 em diante é dos emissores do governo.')
     return str(int(series))
+
+class _ProductionSeriesFix(etree.Resolver):
+    # The official production tiposSimples writes the TSSerieDPS pattern as '^0{0,4}\\d{1,5}$'. In XSD regular
+    # expressions ^ and $ are literal characters, so libxml2 would reject every series; the government's validator
+    # treats them as anchors (series 70000 was authorized in production). Only that pattern is adjusted, in memory.
+    BROKEN = r'<xs:pattern value="^0{0,4}\d{1,5}$"/>'
+    FIXED = r'<xs:pattern value="0{0,4}\d{1,5}"/>'
+
+    def resolve(self, url, pubid, context):
+        if url.replace('\\', '/').rsplit('/', 1)[-1] != 'tiposSimples_v1.01.xsd':
+            return None
+        text = (PRODUCTION_SCHEMA_DIR / 'tiposSimples_v1.01.xsd').read_text(encoding='utf-8')
+        if text.count(self.BROKEN) != 1:
+            raise ValueError('XSD de produção diferente do esperado.')
+        return self.resolve_string(text.replace(self.BROKEN, self.FIXED), context, base_url=url)
+
+@lru_cache(maxsize=2)
+def dps_schema(environment: str) -> etree.XMLSchema:
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
+    if environment == PRODUCTION:
+        parser.resolvers.add(_ProductionSeriesFix())
+    return etree.XMLSchema(etree.parse(str(SCHEMA_DIRS[environment] / 'DPS_v1.01.xsd'), parser))
+
+def validate_dps(xml: bytes, environment: str):
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
+    document = etree.fromstring(xml, parser)
+    if document.getroottree().docinfo.doctype: raise ValueError('DTD não permitida')
+    dps_schema(environment).assertValid(document)
 
 def build_preview(raw: dict, company: dict, options: PreviewOptions, tomador_address: dict | None = None) -> bytes:
     return build_dps(raw, company, options, options.own_company_cnpj, options.series, options.number, options.issued_at, 'Triade-Offline-0.7', tomador_address)
@@ -121,7 +158,9 @@ def build_preview(raw: dict, company: dict, options: PreviewOptions, tomador_add
 def dps_identifier(municipality: str, cnpj: str, series: str, number: str) -> str:
     return f"DPS{municipality}2{cnpj}{series.zfill(5)}{number.zfill(15)}"
 
-def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj: str, series: str, number: str, issued_at: datetime, ver_aplic: str, tomador_address: dict | None = None) -> bytes:
+def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj: str, series: str, number: str, issued_at: datetime, ver_aplic: str, tomador_address: dict | None = None, environment: str = RESTRICTED) -> bytes:
+    if environment not in SCHEMA_DIRS: raise ValueError('Ambiente inválido.')
+    series = normalize_series(series)
     check_instant(issued_at)
     row, errors, _, _ = normalize(raw)
     if errors:
@@ -141,7 +180,9 @@ def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj
         if text is not None: node.text = str(text)
         return node
     info = add(root,'infDPS'); info.set('Id',identifier)
-    for key,value in [('tpAmb','2'),('dhEmi',issued_at.astimezone(BRASILIA).isoformat(timespec='seconds')),('verAplic',ver_aplic),('serie',series),('nDPS',number),('dCompet',row['competencia']),('tpEmit','1'),('finNFSe','0'),('cLocEmi',municipality)]:
+    header=[('tpAmb',environment),('dhEmi',issued_at.astimezone(BRASILIA).isoformat(timespec='seconds')),('verAplic',ver_aplic),('serie',series),('nDPS',number),('dCompet',row['competencia']),('tpEmit','1'),('finNFSe','0'),('cLocEmi',municipality)]
+    if environment == PRODUCTION: header=[item for item in header if item[0] != 'finNFSe']  # 2026-02-09 layout: finNFSe only inside IBSCBS
+    for key,value in header:
         add(info,key,value)
     prest=add(info,'prest'); add(prest,'CNPJ',company['cnpj'])
     # IM/address/name are conditional and must be reviewed against municipal rules.
@@ -163,8 +204,12 @@ def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj
     serv=add(info,'serv'); add(add(serv,'locPrest'),'cLocPrestacao',row['municipio_ibge'])
     code=add(serv,'cServ'); add(code,'cTribNac',row['codigo_tributacao_nacional'])
     if row['codigo_tributacao_municipal']:add(code,'cTribMun',row['codigo_tributacao_municipal'])
-    if row['codigo_nbs']:add(code,'cNBS',row['codigo_nbs'])
-    add(code,'xDescServ',row['descricao_servico'])
+    if environment == PRODUCTION:
+        add(code,'xDescServ',row['descricao_servico'])
+        if row['codigo_nbs']:add(code,'cNBS',row['codigo_nbs'])
+    else:
+        if row['codigo_nbs']:add(code,'cNBS',row['codigo_nbs'])
+        add(code,'xDescServ',row['descricao_servico'])
     if row['observacoes']:add(add(serv,'infoCompl'),'xInfComp',row['observacoes'])
     values=add(info,'valores');add(add(values,'vServPrest'),'vServ',row['valor_servico'])
     tax=add(values,'trib');municipal=add(tax,'tribMun')
@@ -174,7 +219,7 @@ def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj
     if options.totals_mode=='not_informed':add(total,'indTotTrib','0')
     else:add(total,'pTotTribSN',format(options.simples_percent,'.2f'))
     xml=etree.tostring(root,encoding='UTF-8',xml_declaration=True,pretty_print=False)
-    try:validate_xml(xml,SCHEMA_DIR/'DPS_v1.01.xsd')
+    try:validate_dps(xml,environment)
     except (etree.DocumentInvalid,etree.XMLSyntaxError):
-        raise ValueError('XML incompatível com o XSD de testes. Confira os campos e códigos; nenhum arquivo foi enviado.') from None
+        raise ValueError(f'XML incompatível com o XSD de {ENVIRONMENT_NAMES[environment]}. Confira os campos e códigos; nenhum arquivo foi enviado.') from None
     return xml

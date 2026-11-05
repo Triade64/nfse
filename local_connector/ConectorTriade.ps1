@@ -13,7 +13,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeSite.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.9.2'
+$form.Text = 'Tríade NFS-e | Conector local 0.10.0'
 $form.ClientSize = [Drawing.Size]::new(720,705)
 $form.MinimumSize = [Drawing.Size]::new(736,744)
 $form.StartPosition = 'CenterScreen'
@@ -283,20 +283,37 @@ function Invoke-TriadeSiteFlow([string]$LaunchUrl) {
         if ($jobs.Count -eq 0) { $output.Text='Nenhuma DPS pendente neste link. Volte ao site e atualize a lista.';return }
         $issuers=@($jobs|ForEach-Object{[string]$_.summary.cnpj}|Select-Object -Unique)
         if ($issuers.Count -ne 1) { throw 'SITE_MIXED_ISSUERS' }
+        # 0.10.0: each link carries ONE environment (the company's). Production = notes with legal validity.
+        $environments=@($jobs|ForEach-Object{Get-TriadeJobEnvironment -Job $_}|Select-Object -Unique)
+        if ($environments.Count -ne 1) { throw 'SITE_MIXED_ENVIRONMENTS' }
+        $environment=[string]$environments[0];$production=$environment -eq '1'
+        $schemas=if($production){Join-Path $PSScriptRoot 'schemas\producao'}else{Join-Path $PSScriptRoot 'schemas'}
+        if (-not (Test-Path -LiteralPath (Join-Path $schemas 'DPS_v1.01.xsd'))) { throw 'PRODUCTION_SCHEMAS_MISSING' }
         $list=@($jobs|ForEach-Object{('Série '+$_.series+' nº '+$_.number+' — '+$_.summary.tomador+' — competência '+$_.summary.competencia+' — R$ '+$_.summary.valor+$(if($_.status -eq 'Desconhecida'){' (consultar tentativa anterior)'}elseif($_.status -eq 'Autorizada'){' (já autorizada: só baixar o DANFSe)'}else{''}))})
-        $question=@(('Site: '+$launch.site),('Emitente (CNPJ): '+$issuers[0]),('Notas: '+$jobs.Count),'') + $list + @('','AUTORIZA ASSINAR E ENVIAR ESTAS DPS À PRODUÇÃO RESTRITA (TESTES)?','Cada nota é consultada antes do envio; tentativas anteriores nunca são reenviadas. A chave privada não sai deste PC. Produção real bloqueada.')
-        if ([Windows.Forms.MessageBox]::Show($form,($question -join [Environment]::NewLine),'Tríade | Assinar e enviar notas do site',[Windows.Forms.MessageBoxButtons]::YesNo,[Windows.Forms.MessageBoxIcon]::Warning,[Windows.Forms.MessageBoxDefaultButton]::Button2) -ne [Windows.Forms.DialogResult]::Yes) { $output.Text='Cancelado. Nenhuma DPS assinada ou enviada.';return }
+        if ($production) {
+            $question=@('ATENÇÃO: PRODUÇÃO — NOTA REAL, COM VALIDADE JURÍDICA.','',('Site: '+$launch.site),('Emitente (CNPJ): '+$issuers[0]),('Notas: '+$jobs.Count),'') + $list + @('','AUTORIZA ASSINAR E ENVIAR ESTAS DPS À SEFIN NACIONAL DE PRODUÇÃO?','Cada nota é consultada antes do envio; tentativas anteriores nunca são reenviadas. A chave privada não sai deste PC.')
+            $title='Tríade | PRODUÇÃO — notas reais';$icon=[Windows.Forms.MessageBoxIcon]::Error
+        } else {
+            $question=@(('Site: '+$launch.site),('Emitente (CNPJ): '+$issuers[0]),('Notas: '+$jobs.Count),'') + $list + @('','AUTORIZA ASSINAR E ENVIAR ESTAS DPS À PRODUÇÃO RESTRITA (TESTES)?','Cada nota é consultada antes do envio; tentativas anteriores nunca são reenviadas. A chave privada não sai deste PC.')
+            $title='Tríade | Assinar e enviar notas do site';$icon=[Windows.Forms.MessageBoxIcon]::Warning
+        }
+        if ([Windows.Forms.MessageBox]::Show($form,($question -join [Environment]::NewLine),$title,[Windows.Forms.MessageBoxButtons]::YesNo,$icon,[Windows.Forms.MessageBoxDefaultButton]::Button2) -ne [Windows.Forms.DialogResult]::Yes) { $output.Text='Cancelado. Nenhuma DPS assinada ou enviada.';return }
+        if ($production) {
+            $again=@(('Segunda confirmação: '+$jobs.Count+' NFS-e real(is) do CNPJ '+$issuers[0]+'.'),'','Depois de autorizada, a nota só pode ser cancelada ou substituída no Emissor Nacional.','','Confirma o envio à PRODUÇÃO?') -join [Environment]::NewLine
+            if ([Windows.Forms.MessageBox]::Show($form,$again,'Tríade | Confirmar NOTA REAL',[Windows.Forms.MessageBoxButtons]::YesNo,[Windows.Forms.MessageBoxIcon]::Error,[Windows.Forms.MessageBoxDefaultButton]::Button2) -ne [Windows.Forms.DialogResult]::Yes) { $output.Text='Cancelado. Nenhuma DPS assinada ou enviada.';return }
+        }
         $certificate=Select-TriadeCertificateFor $issuers[0]
         $local=[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
         if([string]::IsNullOrWhiteSpace($local)){throw 'LOCAL_DATA_UNAVAILABLE'}
-        $journal=Join-Path $local 'TriadeNfse\Conector\producao-restrita'
+        # Separate history per environment; never delete these folders.
+        $journal=if($production){Join-Path $local 'TriadeNfse\Conector\producao'}else{Join-Path $local 'TriadeNfse\Conector\producao-restrita'}
         $fiscalClient=[Net.Http.HttpClient]::new((New-TriadeRestrictedHandler -Certificate $certificate));$fiscalClient.Timeout=[TimeSpan]::FromSeconds(35)
         $form.Enabled=$false;$form.UseWaitCursor=$true
         foreach($job in $jobs){
             $label='Série '+$job.series+' nº '+$job.number
             $output.Text=(($lines+@($label+': assinando e enviando...')) -join [Environment]::NewLine);$form.Refresh()
             try {
-                $result=Invoke-TriadeSiteJob -Job $job -Certificate $certificate -SchemaDirectory (Join-Path $PSScriptRoot 'schemas') -JournalRoot $journal -FiscalClient $fiscalClient -SiteClient $siteClient -Site $launch.site -Ticket $launch.ticket
+                $result=Invoke-TriadeSiteJob -Job $job -Certificate $certificate -SchemaDirectory $schemas -JournalRoot $journal -FiscalClient $fiscalClient -SiteClient $siteClient -Site $launch.site -Ticket $launch.ticket -Environment $environment
                 $extra=@();if($result.codes){$extra+='códigos '+$result.codes};if($result.PSObject.Properties['diagnostic']){$extra+='etapa '+$result.diagnostic.stage+' / '+$result.diagnostic.reason};if($result.PSObject.Properties['danfse']){$extra+=$(if($result.danfse -eq 'ok'){'DANFSe enviado ao site'}else{'DANFSe pendente ('+$result.danfse+')'})}
                 $lines+=$label+': '+$result.state+' (HTTP '+$result.http_status+')'+$(if($extra){' — '+($extra -join '; ')}else{''})
             } catch {
@@ -305,10 +322,10 @@ function Invoke-TriadeSiteFlow([string]$LaunchUrl) {
                 if($code -eq 'SITE_TICKET_EXPIRED'){break}
             }
         }
-        $script:lastSummary=(@('Tríade NFS-e | conector 0.9.2 pelo site','Ambiente: produção restrita (testes). Produção real bloqueada.') + $lines + @('','Volte ao site: a tela Notas atualiza a situação de cada nota.')) -join [Environment]::NewLine
+        $script:lastSummary=(@('Tríade NFS-e | conector 0.10.0 pelo site',$(if($production){'Ambiente: PRODUÇÃO (notas reais). Histórico: LocalAppData\TriadeNfse\Conector\producao'}else{'Ambiente: produção restrita (testes).'})) + $lines + @('','Volte ao site: a tela Notas atualiza a situação de cada nota.')) -join [Environment]::NewLine
     } catch {
         $code=$_.Exception.Message;if($code -notmatch '^[A-Z0-9_]{3,40}$'){$code='UNCLASSIFIED'}
-        $hint=@{LAUNCH_URL_INVALID='Link inválido. Gere de novo no site.';SITE_NOT_ALLOWED='Este link aponta para um site não autorizado. Nada foi feito.';SITE_TICKET_EXPIRED='O link expirou (15 minutos). Gere de novo no site.';CERT_NOT_FOUND='Nenhum certificado do Windows com o CNPJ do emitente foi encontrado.';CERT_NOT_SELECTED='Nenhum certificado selecionado.';SITE_MIXED_ISSUERS='O link mistura emitentes diferentes.'}[$code]
+        $hint=@{LAUNCH_URL_INVALID='Link inválido. Gere de novo no site.';SITE_NOT_ALLOWED='Este link aponta para um site não autorizado. Nada foi feito.';SITE_TICKET_EXPIRED='O link expirou (15 minutos). Gere de novo no site.';CERT_NOT_FOUND='Nenhum certificado do Windows com o CNPJ do emitente foi encontrado.';CERT_NOT_SELECTED='Nenhum certificado selecionado.';SITE_MIXED_ISSUERS='O link mistura emitentes diferentes.';SITE_MIXED_ENVIRONMENTS='O link mistura produção e testes. Gere um link por ambiente.';SITE_JOB_ENVIRONMENT='Ambiente da nota inválido. Nada foi enviado.';PRODUCTION_SCHEMAS_MISSING='Este conector não tem os esquemas de produção. Baixe o conector 0.10.0 em Configurações no site.';SCHEMA_ENVIRONMENT='Esquemas incompatíveis com o ambiente. Nada foi enviado.'}[$code]
         $script:lastSummary=@('Não foi possível processar o link do site. Nenhuma DPS enviada nesta etapa.',('Código: '+$code),$hint) -join [Environment]::NewLine
     } finally {
         if($null -ne $fiscalClient){$fiscalClient.Dispose()};if($null -ne $siteClient){$siteClient.Dispose()}

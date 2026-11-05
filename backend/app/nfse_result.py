@@ -20,7 +20,7 @@ def _parse(xml: bytes):
     return doc
 
 
-def check_authorized_nfse(nfse_b64: str, access_key: str, reserved_xml: str) -> str:
+def check_authorized_nfse(nfse_b64: str, access_key: str, reserved_xml: str, environment: str = '2') -> str:
     """Returns the decoded NFS-e XML (text) or raises ValueError with a safe message."""
     if not re.fullmatch(r'[0-9]{50}', access_key or ''):
         raise ValueError('Chave de acesso inválida.')
@@ -47,6 +47,6 @@ def check_authorized_nfse(nfse_b64: str, access_key: str, reserved_xml: str) -> 
     for path in ('n:tpAmb', 'n:nDPS', 'n:serie', 'n:dCompet', 'n:prest/n:CNPJ', 'n:valores/n:vServPrest/n:vServ', 'n:toma/n:CNPJ', 'n:toma/n:CPF'):
         if (dps.findtext(path, namespaces=NS) or '') != (sent.findtext(path, namespaces=NS) or ''):
             raise ValueError('Dados da NFS-e divergem da DPS reservada.')
-    if dps.findtext('n:tpAmb', namespaces=NS) != '2':
-        raise ValueError('NFS-e fora do ambiente de testes.')
+    if environment not in ('1', '2') or dps.findtext('n:tpAmb', namespaces=NS) != environment:
+        raise ValueError('NFS-e de ambiente diferente do da DPS reservada.')
     return raw.decode('utf-8')

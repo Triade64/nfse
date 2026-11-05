@@ -14,8 +14,20 @@ namespace TriadeOffline {
  public sealed class XmlFiles : XmlUrlResolver {
   readonly string root;
   public XmlFiles(string directory) { root=Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar; }
+  // The official production package (2026-02-09) ships xmldsig-core-schema.xsd with the W3C DOCTYPE header; DTDs stay
+  // prohibited, so exactly that known header is removed in memory. Any other DOCTYPE is refused. The file is not changed.
+  const string W3cDoctype="<!DOCTYPE schema\n  PUBLIC \"-//W3C//DTD XMLSchema 200102//EN\" \"http://www.w3.org/2001/XMLSchema.dtd\"\n [\n   <!ATTLIST schema \n     xmlns:ds CDATA #FIXED \"http://www.w3.org/2000/09/xmldsig#\">\n   <!ENTITY dsig 'http://www.w3.org/2000/09/xmldsig#'>\n   <!ENTITY % p ''>\n   <!ENTITY % s ''>\n  ]>";
   public override object GetEntity(Uri uri,string role,Type type) {
    if(!uri.IsFile || !Path.GetFullPath(uri.LocalPath).StartsWith(root,StringComparison.OrdinalIgnoreCase) || Path.GetDirectoryName(Path.GetFullPath(uri.LocalPath))+Path.DirectorySeparatorChar != root || Path.GetExtension(uri.LocalPath)!=".xsd") throw new XmlException("XSD_IMPORT_BLOCKED");
+   if(Path.GetFileName(uri.LocalPath)=="xmldsig-core-schema.xsd") {
+    string text=File.ReadAllText(uri.LocalPath).Replace("\r\n","\n");
+    int i=text.IndexOf("<!DOCTYPE",StringComparison.Ordinal);
+    if(i>=0) {
+     if(i+W3cDoctype.Length>text.Length || string.CompareOrdinal(text,i,W3cDoctype,0,W3cDoctype.Length)!=0 || text.IndexOf("<!DOCTYPE",i+1,StringComparison.Ordinal)>=0 || text.IndexOf("<!ENTITY",i+W3cDoctype.Length,StringComparison.Ordinal)>=0) throw new XmlException("XSD_DOCTYPE_BLOCKED");
+     text=text.Remove(i,W3cDoctype.Length);
+    }
+    return new MemoryStream(new System.Text.UTF8Encoding(false).GetBytes(text));
+   }
    return File.OpenRead(uri.LocalPath);
   }
  }
@@ -45,8 +57,16 @@ namespace TriadeOffline {
 '@
 }
 
+function Assert-TriadeSchemaEnvironment {
+ # 0.10.0: schemas\ holds the restricted layout (tpAmb 2) and schemas\producao the production layout (tpAmb 1).
+ # The schema folder and the expected environment must agree, so a production XML is never checked against test rules.
+ param([string]$SchemaDirectory,[string]$Environment)
+ $leaf=[IO.Path]::GetFileName([IO.Path]::GetFullPath($SchemaDirectory).TrimEnd('\','/'))
+ if($Environment -notin @('1','2') -or (($Environment -eq '1') -ne ($leaf -eq 'producao'))){throw 'SCHEMA_ENVIRONMENT'}
+}
 function Read-TriadeDps {
- param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][string]$SchemaDirectory)
+ param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[ValidateSet('1','2')][string]$Environment='2')
+ Assert-TriadeSchemaEnvironment -SchemaDirectory $SchemaDirectory -Environment $Environment
  if($Bytes.Length -eq 0 -or $Bytes.Length -gt 2097152){throw 'XML_SIZE'}
  $settings=[Xml.XmlReaderSettings]::new();$settings.DtdProcessing=[Xml.DtdProcessing]::Prohibit;$settings.XmlResolver=$null;$settings.MaxCharactersInDocument=2097152
  $stream=[IO.MemoryStream]::new($Bytes,$false);$reader=$null
@@ -61,7 +81,7 @@ function Read-TriadeDps {
  $root=$document.DocumentElement
  if($root.LocalName -ne 'DPS' -or $root.NamespaceURI -ne 'http://www.sped.fazenda.gov.br/nfse' -or $root.GetAttribute('versao') -ne '1.01'){throw 'XML_ROOT'}
  if($document.SelectNodes('//n:infDPS',$ns).Count -ne 1 -or $document.SelectNodes('//*[@Id or @ID or @id]').Count -ne 1){throw 'XML_ID'}
- if($document.SelectSingleNode('/n:DPS/n:infDPS/n:tpAmb',$ns).InnerText -ne '2' -or $document.SelectSingleNode('/n:DPS/n:infDPS/n:tpEmit',$ns).InnerText -ne '1'){throw 'RESTRICTED_OWN_ONLY'}
+ if($document.SelectSingleNode('/n:DPS/n:infDPS/n:tpAmb',$ns).InnerText -ne $Environment -or $document.SelectSingleNode('/n:DPS/n:infDPS/n:tpEmit',$ns).InnerText -ne '1'){throw 'RESTRICTED_OWN_ONLY'}
  return ,$document
 }
 
@@ -77,9 +97,9 @@ function Get-TriadeDpsReview {
 }
 
 function Protect-TriadeOfflineDps {
- param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[Parameter(Mandatory=$true)][string]$OwnCnpj)
+ param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[Parameter(Mandatory=$true)][string]$OwnCnpj,[ValidateSet('1','2')][string]$Environment='2')
  $null=Get-TriadeCertificateCheck -Certificate $Certificate
- $document=Read-TriadeDps -Bytes $Bytes -SchemaDirectory $SchemaDirectory
+ $document=Read-TriadeDps -Bytes $Bytes -SchemaDirectory $SchemaDirectory -Environment $Environment
  if($document.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#').Count -ne 0){throw 'ALREADY_SIGNED'}
  $review=Get-TriadeDpsReview -Document $document
  $certificateCnpj=$null
@@ -101,7 +121,7 @@ function Protect-TriadeOfflineDps {
   $signed.KeyInfo=[Security.Cryptography.Xml.KeyInfo]::new();$signed.KeyInfo.AddClause([Security.Cryptography.Xml.KeyInfoX509Data]::new($Certificate))
   $signed.ComputeSignature();$null=$document.DocumentElement.AppendChild($document.ImportNode($signed.GetXml(),$true))
   $result=[Text.UTF8Encoding]::new($false).GetBytes($document.OuterXml)
-  $roundtrip=Read-TriadeDps -Bytes $result -SchemaDirectory $SchemaDirectory
+  $roundtrip=Read-TriadeDps -Bytes $result -SchemaDirectory $SchemaDirectory -Environment $Environment
   $verifier=[Security.Cryptography.Xml.SignedXml]::new($roundtrip);$verifier.LoadXml($roundtrip.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#')[0])
   if(-not $verifier.CheckSignature($Certificate,$true)){throw 'SIGNATURE_CHECK_FAILED'}
   return ,$result
@@ -109,9 +129,9 @@ function Protect-TriadeOfflineDps {
 }
 
 function Test-TriadeSignedDps {
- param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory)
+ param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[ValidateSet('1','2')][string]$Environment='2')
  $null=Get-TriadeCertificateCheck -Certificate $Certificate
- $document=Read-TriadeDps -Bytes $Bytes -SchemaDirectory $SchemaDirectory
+ $document=Read-TriadeDps -Bytes $Bytes -SchemaDirectory $SchemaDirectory -Environment $Environment
  $review=Get-TriadeDpsReview -Document $document
  $certCnpj=$null
  foreach($extension in $Certificate.Extensions){if($extension.Oid.Value -eq '2.5.29.17'){$certCnpj=[TriadeOffline.Cnpj]::FromSan($extension.RawData)}}

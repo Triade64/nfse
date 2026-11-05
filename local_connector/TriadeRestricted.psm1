@@ -50,9 +50,16 @@ function ConvertFrom-TriadeXmlEnvelope {
   return ,$target.ToArray()
  }finally{if($null -ne $gzip){$gzip.Dispose()};$source.Dispose();$target.Dispose()}
 }
+# Fixed hosts per environment (production confirmed by the production Swagger, 2026-11-05: same contract as restricted).
+$script:TriadeSefinBase=@{'2'='https://sefin.producaorestrita.nfse.gov.br/SefinNacional';'1'='https://sefin.nfse.gov.br/SefinNacional'}
+function Get-TriadeEnvironmentLabels {
+ param([ValidateSet('1','2')][string]$Environment)
+ if($Environment -eq '1'){return [PSCustomObject]@{authorized='Autorizada em produção';rejected='Rejeitada em produção';name='produção'}}
+ return [PSCustomObject]@{authorized='Autorizada em teste';rejected='Rejeitada em teste';name='produção restrita'}
+}
 function New-TriadeFiscalRequest {
- param([ValidateSet('HEAD_DPS','GET_DPS','GET_NFSE','POST_DPS')][string]$Operation,[string]$Identifier,[byte[]]$Xml)
- $base='https://sefin.producaorestrita.nfse.gov.br/SefinNacional'
+ param([ValidateSet('HEAD_DPS','GET_DPS','GET_NFSE','POST_DPS')][string]$Operation,[string]$Identifier,[byte[]]$Xml,[ValidateSet('1','2')][string]$Environment='2')
+ $base=$script:TriadeSefinBase[$Environment]
  switch($Operation){
   HEAD_DPS {
    if($Identifier -cnotmatch '^DPS[0-9]{42}$'){throw 'XML_ID'}
@@ -113,10 +120,10 @@ function Get-TriadeDanfse {
  }finally{if($null -ne $stream){$stream.Dispose()};if($null -ne $response){$response.Dispose()};$memory.Dispose();$cancel.Dispose();$request.Dispose()}
 }
 function Read-TriadeFiscalJson {
- param($Response)
+ param($Response,[ValidateSet('1','2')][string]$Environment='2')
  if([string]::IsNullOrWhiteSpace($Response.text)){throw 'RESPONSE_FORMAT'}
  $body=$Response.text|ConvertFrom-Json
- if($body -isnot [PSCustomObject] -or ($body.tipoAmbiente -isnot [int] -and $body.tipoAmbiente -isnot [long]) -or $body.tipoAmbiente -ne 2){throw 'RESPONSE_ENVIRONMENT'}
+ if($body -isnot [PSCustomObject] -or ($body.tipoAmbiente -isnot [int] -and $body.tipoAmbiente -isnot [long]) -or $body.tipoAmbiente -ne [int]$Environment){throw 'RESPONSE_ENVIRONMENT'}
  return $body
 }
 function Get-TriadeFiscalErrorCodes {
@@ -137,8 +144,8 @@ function Test-TriadeResponseId {
  return ([string]$Value -ceq $Identifier) -or ([string]$Value -ceq ('NFS'+[string]$Key))
 }
 function Save-TriadeReturnedNfse {
- param($Body,[string]$Identifier,[string]$Key,[string]$Directory,[string]$SchemaDirectory,$Review)
- if($Body.tipoAmbiente -ne 2 -or $Key -notmatch '^[0-9]{50}$' -or $Body.chaveAcesso -ne $Key){throw 'RESPONSE_ID'}
+ param($Body,[string]$Identifier,[string]$Key,[string]$Directory,[string]$SchemaDirectory,$Review,[ValidateSet('1','2')][string]$Environment='2')
+ if($Body.tipoAmbiente -ne [int]$Environment -or $Key -notmatch '^[0-9]{50}$' -or $Body.chaveAcesso -ne $Key){throw 'RESPONSE_ID'}
  $bytes=ConvertFrom-TriadeXmlEnvelope -Encoded $Body.nfseXmlGZipB64
  # Preserve exactly the returned bytes; never regenerate a government document.
  Write-TriadeDurableFile -Path (Join-Path $Directory 'nfse-recebida.xml') -Bytes $bytes -Replace
@@ -153,7 +160,7 @@ function Save-TriadeReturnedNfse {
  $ns=[Xml.XmlNamespaceManager]::new($doc.NameTable);$ns.AddNamespace('n','http://www.sped.fazenda.gov.br/nfse')
  $info=$doc.SelectSingleNode('/n:NFSe/n:infNFSe',$ns)
  $dps=$doc.SelectSingleNode('/n:NFSe/n:infNFSe/n:DPS/n:infDPS',$ns)
- if($null -eq $info -or $null -eq $dps -or $info.GetAttribute('Id') -ne ('NFS'+$Key) -or $dps.GetAttribute('Id') -ne $Identifier -or $dps.SelectSingleNode('n:tpAmb',$ns).InnerText -ne '2'){throw 'RESPONSE_ID'}
+ if($null -eq $info -or $null -eq $dps -or $info.GetAttribute('Id') -ne ('NFS'+$Key) -or $dps.GetAttribute('Id') -ne $Identifier -or $dps.SelectSingleNode('n:tpAmb',$ns).InnerText -ne $Environment){throw 'RESPONSE_ID'}
  if($dps.SelectSingleNode('n:prest/n:CNPJ',$ns).InnerText -ne $Review.cnpj -or $dps.SelectSingleNode('n:dCompet',$ns).InnerText -ne $Review.competence -or $dps.SelectSingleNode('n:valores/n:vServPrest/n:vServ',$ns).InnerText -ne $Review.amount){throw 'RESPONSE_ID'}
  return Get-TriadeXmlHash -Bytes $bytes
 }
@@ -176,8 +183,10 @@ function Get-TriadeRestrictedResult {
  return [PSCustomObject]@{state=$State.status;attempted=[bool]$State.attempted;http_status=$HttpStatus;codes=$ErrorCodes;message=$Message}
 }
 function Invoke-TriadeSingleRestrictedDps {
- param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[Parameter(Mandatory=$true)][string]$JournalRoot,[Parameter(Mandatory=$true)][Net.Http.HttpClient]$Client,[switch]$ConfirmRestrictedSend,[switch]$ConfirmTimezoneRevision,[switch]$ConfirmImRevision)
- $review=Test-TriadeSignedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+ param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[Parameter(Mandatory=$true)][string]$JournalRoot,[Parameter(Mandatory=$true)][Net.Http.HttpClient]$Client,[switch]$ConfirmRestrictedSend,[switch]$ConfirmTimezoneRevision,[switch]$ConfirmImRevision,[ValidateSet('1','2')][string]$Environment='2')
+ # 0.10.0: the same journaled flow serves production (tpAmb 1, own host, own journal folder chosen by the caller).
+ $labels=Get-TriadeEnvironmentLabels -Environment $Environment
+ $review=Test-TriadeSignedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -Environment $Environment
  $hash=Get-TriadeXmlHash -Bytes $Bytes
  $directory=Join-Path $JournalRoot $review.identifier
  $null=[IO.Directory]::CreateDirectory($directory)
@@ -188,11 +197,12 @@ function Invoke-TriadeSingleRestrictedDps {
   if([IO.File]::Exists($statePath)){
    if(([IO.FileInfo]::new($statePath)).Length -gt 32768){throw 'JOURNAL_INVALID'}
    $state=[IO.File]::ReadAllText($statePath)|ConvertFrom-Json
-   if($state.version -ne 1 -or $state.environment -ne 2 -or $state.identifier -ne $review.identifier -or $state.attempted -isnot [bool]){throw 'JOURNAL_CONFLICT'}
+   if($state.version -ne 1 -or $state.environment -ne [int]$Environment -or $state.identifier -ne $review.identifier -or $state.attempted -isnot [bool]){throw 'JOURNAL_CONFLICT'}
    $savedXml=Join-Path $directory 'dps-assinada.xml'
    if(-not [IO.File]::Exists($savedXml) -or ([IO.FileInfo]::new($savedXml)).Length -gt 2097152 -or (Get-TriadeXmlHash -Bytes ([IO.File]::ReadAllBytes($savedXml))) -ne $state.xml_sha256){throw 'JOURNAL_INVALID'}
    if($state.xml_sha256 -ne $hash){
     $phase='CONFERIR_REVISAO'
+    if($Environment -ne '2'){throw 'TIMEZONE_REVISION_BLOCKED'}
     if(-not $state.attempted){throw 'TIMEZONE_REVISION_BLOCKED'}
     $responsePath=Join-Path $directory 'resposta-envio.json'
     if(-not [IO.File]::Exists($responsePath) -or ([IO.FileInfo]::new($responsePath)).Length -gt 8388608){throw 'TIMEZONE_REVISION_BLOCKED'}
@@ -243,7 +253,7 @@ function Invoke-TriadeSingleRestrictedDps {
      return $result
     }
     $phase='CONSULTAR_ANTES_DA_REVISAO'
-    $check=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation HEAD_DPS -Identifier $review.identifier)
+    $check=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation HEAD_DPS -Identifier $review.identifier -Environment $Environment)
     $lastHttp=$check.status
     if($check.status -ne 404 -or -not [string]::IsNullOrWhiteSpace($check.text)){
      return Get-TriadeRestrictedResult -State $state -HttpStatus $check.status -Message 'Não foi confirmada ausência da DPS. Revisão não enviada; consulte o resultado usando o XML da tentativa anterior.'
@@ -253,7 +263,7 @@ function Invoke-TriadeSingleRestrictedDps {
     return Invoke-TriadeSingleRestrictedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $revisionRoot -Client $Client -ConfirmRestrictedSend
    }
   }else{
-   $state=[PSCustomObject]@{version=1;environment=2;identifier=$review.identifier;xml_sha256=$hash;attempted=$false;status='Novo';updated_utc='';access_key='';nfse_sha256=''}
+   $state=[PSCustomObject]@{version=1;environment=[int]$Environment;identifier=$review.identifier;xml_sha256=$hash;attempted=$false;status='Novo';updated_utc='';access_key='';nfse_sha256=''}
    # Persist the exact signed XML before any fiscal HTTP request.
    $xmlPath=Join-Path $directory 'dps-assinada.xml'
    if([IO.File]::Exists($xmlPath)){
@@ -263,38 +273,38 @@ function Invoke-TriadeSingleRestrictedDps {
   }
   $phase='CONSULTAR_DPS'
   # Always reconcile, including after a previous timeout or a process crash.
-  $lookup=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation HEAD_DPS -Identifier $review.identifier)
+  $lookup=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation HEAD_DPS -Identifier $review.identifier -Environment $Environment)
   $lastHttp=$lookup.status;$phase='GRAVAR_CONSULTA'
   Write-TriadeDurableFile -Path (Join-Path $directory 'ultima-consulta.json') -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($lookup.text)) -Replace
   $phase='VALIDAR_CONSULTA'
   if(-not [string]::IsNullOrWhiteSpace($lookup.text)){throw 'RESPONSE_FORMAT'}
   if($lookup.status -eq 200){
    $phase='RECUPERAR_CHAVE_DPS'
-   $lookup=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation GET_DPS -Identifier $review.identifier)
+   $lookup=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation GET_DPS -Identifier $review.identifier -Environment $Environment)
    $lastHttp=$lookup.status
    Write-TriadeDurableFile -Path (Join-Path $directory 'consulta-chave-dps.json') -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($lookup.text)) -Replace
    if($lookup.status -ne 200){throw 'NFSE_RECOVERY_PENDING'}
    $phase='VALIDAR_CONSULTA'
-   $found=Read-TriadeFiscalJson -Response $lookup
+   $found=Read-TriadeFiscalJson -Response $lookup -Environment $Environment
    if(-not (Test-TriadeResponseId -Value $found.idDps -Identifier $review.identifier -Key $found.chaveAcesso)){throw 'RESPONSE_ID'}
    $state.status='Localizada; documento pendente';$state.attempted=$true;$state.access_key=$found.chaveAcesso
    Save-TriadeRestrictedState -Path $statePath -State $state
    $phase='CONSULTAR_NFSE'
-   $nfse=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation GET_NFSE -Identifier $found.chaveAcesso)
+   $nfse=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation GET_NFSE -Identifier $found.chaveAcesso -Environment $Environment)
    $lastHttp=$nfse.status;$phase='GRAVAR_CONSULTA_NFSE'
    Write-TriadeDurableFile -Path (Join-Path $directory 'resposta-consulta-nfse.json') -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($nfse.text)) -Replace
    if($nfse.status -ne 200){throw 'NFSE_RECOVERY_PENDING'}
    $phase='VALIDAR_NFSE'
-   $body=Read-TriadeFiscalJson -Response $nfse
-   $state.nfse_sha256=Save-TriadeReturnedNfse -Body $body -Identifier $review.identifier -Key $found.chaveAcesso -Directory $directory -SchemaDirectory $SchemaDirectory -Review $review
-   $state.status='Autorizada em teste';Save-TriadeRestrictedState -Path $statePath -State $state
-   return Get-TriadeRestrictedResult -State $state -Message 'NFS-e de teste localizada e XML recuperado. Nenhum POST foi realizado nesta execução.' -HttpStatus 200
+   $body=Read-TriadeFiscalJson -Response $nfse -Environment $Environment
+   $state.nfse_sha256=Save-TriadeReturnedNfse -Body $body -Identifier $review.identifier -Key $found.chaveAcesso -Directory $directory -SchemaDirectory $SchemaDirectory -Review $review -Environment $Environment
+   $state.status=$labels.authorized;Save-TriadeRestrictedState -Path $statePath -State $state
+   return Get-TriadeRestrictedResult -State $state -Message ('NFS-e localizada em '+$labels.name+' e XML recuperado. Nenhum POST foi realizado nesta execução.') -HttpStatus 200
   }
   if($lookup.status -ne 404){return Get-TriadeRestrictedResult -State $state -Message 'A consulta prévia não confirmou ausência da DPS. Envio bloqueado; confira o HTTP e consulte novamente.' -HttpStatus $lookup.status}
   if($state.attempted){return Get-TriadeRestrictedResult -State $state -Message 'Consulta retornou 404, mas existe tentativa anterior registrada. Reenvio bloqueado; o resultado anterior precisa ser reconciliado.' -HttpStatus 404}
   if(-not $ConfirmRestrictedSend){return Get-TriadeRestrictedResult -State $state -Message 'Consulta retornou 404. Nenhuma tentativa de envio registrada neste PC e nenhum POST realizado.' -HttpStatus 404}
   $phase='PREPARAR_ENVIO'
-  $post=New-TriadeFiscalRequest -Operation POST_DPS -Xml $Bytes
+  $post=New-TriadeFiscalRequest -Operation POST_DPS -Xml $Bytes -Environment $Environment
   try{
    # Fail closed: this durable marker MUST precede SendAsync. Never reset it after failure.
    $phase='GRAVAR_MARCADOR'
@@ -307,20 +317,20 @@ function Invoke-TriadeSingleRestrictedDps {
   Write-TriadeDurableFile -Path (Join-Path $directory 'resposta-envio.json') -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($response.text)) -Replace
   $phase='VALIDAR_RESPOSTA'
   if($response.status -eq 201){
-   $body=Read-TriadeFiscalJson -Response $response
+   $body=Read-TriadeFiscalJson -Response $response -Environment $Environment
    if(-not (Test-TriadeResponseId -Value $body.idDps -Identifier $review.identifier -Key $body.chaveAcesso)){throw 'RESPONSE_ID'}
-   $state.nfse_sha256=Save-TriadeReturnedNfse -Body $body -Identifier $review.identifier -Key $body.chaveAcesso -Directory $directory -SchemaDirectory $SchemaDirectory -Review $review
-   $state.access_key=$body.chaveAcesso;$state.status='Autorizada em teste';Save-TriadeRestrictedState -Path $statePath -State $state
-   return Get-TriadeRestrictedResult -State $state -Message 'API autorizou a NFS-e em produção restrita. XML original e resposta preservados no PC.' -HttpStatus 201
+   $state.nfse_sha256=Save-TriadeReturnedNfse -Body $body -Identifier $review.identifier -Key $body.chaveAcesso -Directory $directory -SchemaDirectory $SchemaDirectory -Review $review -Environment $Environment
+   $state.access_key=$body.chaveAcesso;$state.status=$labels.authorized;Save-TriadeRestrictedState -Path $statePath -State $state
+   return Get-TriadeRestrictedResult -State $state -Message ('API autorizou a NFS-e em '+$labels.name+'. XML original e resposta preservados no PC.') -HttpStatus 201
   }
   if($response.status -eq 400 -or $response.status -eq 403){
-   $body=Read-TriadeFiscalJson -Response $response
+   $body=Read-TriadeFiscalJson -Response $response -Environment $Environment
    if($null -eq $body.erros -or @($body.erros).Count -eq 0){throw 'RESPONSE_FORMAT'}
    $idProperty=$body.PSObject.Properties['idDPS']
    if($null -ne $idProperty -and -not [string]::IsNullOrEmpty([string]$idProperty.Value) -and $idProperty.Value -ne $review.identifier){throw 'RESPONSE_ID'}
    $codes=Get-TriadeFiscalErrorCodes -Body $body
-   $state.status='Rejeitada em teste';Save-TriadeRestrictedState -Path $statePath -State $state
-   return Get-TriadeRestrictedResult -State $state -Message 'API rejeitou o teste. A resposta detalhada está salva somente no PC. Não há reenvio automático.' -HttpStatus $response.status -ErrorCodes $codes
+   $state.status=$labels.rejected;Save-TriadeRestrictedState -Path $statePath -State $state
+   return Get-TriadeRestrictedResult -State $state -Message 'API rejeitou a DPS. A resposta detalhada está salva somente no PC. Não há reenvio automático.' -HttpStatus $response.status -ErrorCodes $codes
   }
   return Get-TriadeRestrictedResult -State $state -Message 'Resposta inesperada após a tentativa. Use Consultar resultado; reenvio bloqueado.' -HttpStatus $response.status
  }catch{

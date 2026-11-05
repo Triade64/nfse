@@ -156,6 +156,7 @@ try{
  & (Join-Path $PSScriptRoot 'Test-Timezone.ps1') -Certificate $Certificate -SchemaDirectory $SchemaDirectory -Directory $Directory -Success $success
  & (Join-Path $PSScriptRoot 'Test-Im.ps1') -Certificate $Certificate -SchemaDirectory $SchemaDirectory -Directory $Directory -Success $success
  & (Join-Path $PSScriptRoot 'Test-Site.ps1') -Certificate $Certificate -SchemaDirectory $SchemaDirectory -Directory $Directory -Success $success -Rejected $rejected -Key $key -Found $found
+ & (Join-Path $PSScriptRoot 'Test-Production.ps1') -Certificate $Certificate -SchemaDirectory $SchemaDirectory -Directory $Directory
  Write-Output 'PASS: diagnostico seguro de timeout antes e depois do POST, ambiente zero em sucesso bloqueado e falha de gravacao, sem mensagem interna ou caminho privado.'
  Write-Output 'PASS: transporte simulado, confirmacao, journal antes do POST, 201/400/500, timeout, consulta sem reenvio, ambiente incorreto, redirect, GZip e verbos aprovados. Nenhuma chamada fiscal real.'
  Write-Output 'PASS: 0.8.5 aceita idDps igual ao Id da DPS ou a NFS+chave (formato real), no envio e na consulta; recusa outra chave, valor arbitrario ou caixa diferente sem reenvio.'

@@ -131,3 +131,27 @@ it('offers the DANFSe download when the PDF exists and Buscar DANFSe when it doe
  expect(api).toHaveBeenCalledWith('/connector/tickets','POST',{dps_ids:[51]});
  vi.unstubAllGlobals();
 });
+
+it('production company: emitting needs the explicit real-note confirmation and sends it',async()=>{
+ const click=vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(()=>{});
+ const prod=[{...companies[0],config:{...companies[0].config,ambiente:'1'}}];
+ const authorized={...reserved,id:9,situation:'NFS-e autorizada',dps:{id:6,series:'1',number:1,status:'Autorizada',identifier:'DPSY',environment:'1',has_danfse:true}};
+ const api=vi.fn().mockResolvedValueOnce([ready,authorized]).mockResolvedValueOnce({last_simples_percent:'6.54'}).mockResolvedValueOnce({id:10,identifier:'DPS0002',series:'1',number:2,existing:false}).mockResolvedValueOnce([ready]);
+ render(<Notas api={api} companies={prod} customers={[]} services={[]} role="admin"/>);
+ await screen.findByText('CLIENTE A');
+ expect(screen.getByText(/PRODUÇÃO ·/)).toBeTruthy();  // authorized real note is marked as production
+ fireEvent.click(screen.getByRole('button',{name:/Emitir/}));
+ const dialog=screen.getByRole('dialog');
+ expect(dialog.textContent).toContain('NOTA REAL, COM VALIDADE JURÍDICA');
+ const percent=within(dialog).getByLabelText(/Percentual aproximado/) as HTMLInputElement;await waitFor(()=>expect(percent.value).toBe('6.54'));
+ const submit=within(dialog).getByRole('button',{name:/Reservar e baixar XML/}) as HTMLButtonElement;
+ fireEvent.click(within(dialog).getByRole('checkbox',{name:/Conferi emitente/}));
+ fireEvent.click(within(dialog).getByRole('checkbox',{name:/Abrir o conector/}));
+ expect(submit.disabled).toBe(true);
+ fireEvent.click(within(dialog).getByRole('checkbox',{name:/Confirmo que esta é uma NOTA REAL/}));
+ expect(submit.disabled).toBe(false);
+ fireEvent.submit(submit.closest('form')!);
+ await waitFor(()=>expect(screen.getByRole('status').textContent).toContain('série 1, nº 2'));
+ expect(api.mock.calls[2]).toEqual(['/notes/7/emit','POST',{batch_revision:4,expected_raw:raw,confirm:true,confirm_production:true,simples_percent:'6.54'}]);
+ expect(click).toHaveBeenCalled();
+});

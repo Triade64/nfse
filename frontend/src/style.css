@@ -12,3 +12,4 @@
 .notes .entryActions .textBtn{display:inline-flex;align-items:center;gap:4px}
 fieldset.fiscalProfile{border:1px solid var(--line,#d9e2dd);border-radius:12px;padding:12px 16px;margin:4px 0}
 fieldset.fiscalProfile legend{font-weight:700;padding:0 6px}
+.danger{padding:13px 16px;border-radius:7px;font-size:12px;margin-bottom:18px;line-height:1.5;background:#fdecea;color:#9b2c20;border:1px solid #e9a99f}.danger strong{color:#8a1f15}p.danger{margin-top:8px}.prodTag{color:#b3261e;font-size:10px}

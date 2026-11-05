@@ -10,7 +10,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeConnector.Core.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.1'
+$form.Text = 'Tríade NFS-e | Conector local 0.2'
 $form.ClientSize = [Drawing.Size]::new(720,650)
 $form.MinimumSize = [Drawing.Size]::new(736,689)
 $form.StartPosition = 'CenterScreen'
@@ -69,11 +69,14 @@ $run.Add_Click({
             $temporary=Import-TriadeLocalA1 -Path $fileBox.Text -Password $secure;$active=$temporary
         }
         $check=Get-TriadeCertificateCheck -Certificate $active
-        $lines=@('Tríade NFS-e | diagnóstico local 0.1',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
+        $lines=@('Tríade NFS-e | diagnóstico local 0.2',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
+        if ($null -ne $temporary) { $lines+='Origem: arquivo A1 temporário (chave efêmera).' } else { $lines+='Origem: certificado instalado no Windows.' }
+        $lines+=('PowerShell: '+$PSVersionTable.PSVersion.ToString()+' | .NET: '+[Environment]::Version.ToString())
         if ($network.Checked) {
             $probe=Invoke-TriadeRestrictedProbe -Certificate $active
             if ($null -ne $probe.http_status) { $lines+=('HTTP '+$probe.http_status) }
             $lines+=$probe.message
+            if ($null -ne $probe.failure) { $lines+=('Categoria: '+$probe.failure.category+' | Códigos: '+$probe.failure.codes);$lines+=('Tipos: '+$probe.failure.types) }
         } else { $lines+='Sem conexão externa: apenas verificação local.' }
         $lines+='Nenhuma DPS enviada. Cadeia ICP-Brasil, revogação, procuração e credenciamento não foram validados.'
         $script:lastSummary=$lines -join [Environment]::NewLine;$output.Text=$script:lastSummary;$copy.Enabled=$true

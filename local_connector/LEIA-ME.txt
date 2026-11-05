@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.1 - DIAGNOSTICO
+TRIADE NFS-e | CONECTOR LOCAL 0.2 - DIAGNOSTICO
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -14,3 +14,5 @@ O conector nao faz upload do arquivo, da senha ou da chave privada. Na autentica
 Nao ha servidor HTTP local, pareamento com o site, emissao, assinatura de DPS, cancelamento ou atualizacao automatica nesta versao. O resultado e copiado manualmente. Nao sao validados cadeia ICP-Brasil, revogacao, procuracao ou credenciamento. HTTP 200 da documentacao nao confirma autorizacao fiscal. Certificados A3/token nao foram homologados.
 
 O certificado original continua onde voce o guardou. Feche o programa ao terminar. Nenhum log de certificado, senha ou nome do titular e gravado pelo conector. O Windows e o ambiente local continuam responsaveis pela seguranca da memoria, arquivos e certificados ja instalados.
+
+Versao 0.2: o resultado identifica certificado do Windows versus A1 temporario e mostra somente categoria, tipos de excecao e codigos numericos da falha. Mensagens internas, caminhos e identidade do certificado nao sao copiados. O codigo sugere uma linha de investigacao; nao confirma sozinho a causa.

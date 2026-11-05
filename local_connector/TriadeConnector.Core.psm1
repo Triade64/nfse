@@ -42,23 +42,60 @@ function New-TriadeRestrictedHandler {
     return $handler
 }
 
+function Format-TriadeNumericCode {
+    param([int]$Code)
+    return '0x'+[BitConverter]::ToUInt32([BitConverter]::GetBytes($Code),0).ToString('X8')
+}
+
+function Get-TriadeConnectionFailure {
+    param([Parameter(Mandatory=$true)][Exception]$Exception)
+    $codes=@();$types=@();$networkStatus=@();$current=$Exception
+    for($i=0;$null -ne $current -and $i -lt 8;$i++) {
+        $codes+=Format-TriadeNumericCode -Code $current.HResult
+        $types+=$current.GetType().Name
+        if ($current -is [ComponentModel.Win32Exception]) { $codes+=Format-TriadeNumericCode -Code $current.NativeErrorCode }
+        if ($current -is [Net.WebException]) { $networkStatus+=$current.Status.ToString() }
+        if ($current -is [Net.Sockets.SocketException]) { $networkStatus+=$current.SocketErrorCode.ToString() }
+        $current=$current.InnerException
+    }
+    $category='unknown';$message='Conexão não concluída. O código técnico abaixo permite investigar sem compartilhar certificado ou senha.'
+    if ($codes -contains '0x8009030E' -or $codes -contains '0x8009030D') {
+        $category='credentials';$message='O Windows não disponibilizou a credencial para TLS. Se a origem for arquivo A1 temporário, tente Selecionar certificado do Windows. O código não comprova sozinho a causa.'
+    } elseif ($codes -contains '0x80090325' -or $codes -contains '0x800B0109') {
+        $category='trust';$message='Falha de confiança na cadeia de certificados da conexão. Confira o Windows e a rede com a TI. Não desative a validação TLS.'
+    } elseif ($codes -contains '0x80090322' -or $codes -contains '0x800B010F') {
+        $category='hostname';$message='O nome do servidor não corresponde ao certificado apresentado na conexão. Confira a rede/proxy com a TI.'
+    } elseif ($codes -contains '0x80090328' -or $codes -contains '0x800B0101') {
+        $category='tls_validity';$message='Certificado da conexão fora da validade ou relógio do Windows incorreto. Isso pode envolver uma cadeia diferente do A1 verificado localmente.'
+    } elseif ($types -contains 'TaskCanceledException' -or $types -contains 'OperationCanceledException' -or $networkStatus -contains 'Timeout') {
+        $category='timeout';$message='O tempo limite da conexão foi atingido. Confira a rede e tente novamente mais tarde.'
+    } elseif ($types -contains 'SocketException' -or $networkStatus -contains 'NameResolutionFailure' -or $networkStatus -contains 'ProxyNameResolutionFailure' -or $networkStatus -contains 'ConnectFailure') {
+        $category='network';$message='Falha de rede, DNS, proxy ou conexão ao servidor. Confira a conectividade do PC.'
+    } elseif ($types -contains 'AuthenticationException' -or $networkStatus -contains 'TrustFailure' -or $networkStatus -contains 'SecureChannelFailure' -or $codes -contains '0x80090326' -or $codes -contains '0x80090331') {
+        $category='tls';$message='A negociação TLS falhou. O código técnico ajuda a verificar certificado, cadeia e protocolos, sem desativar as verificações de segurança.'
+    }
+    return [PSCustomObject]@{ category=$category; codes=(@($codes|Select-Object -Unique) -join ', '); types=($types -join ' > '); message=$message }
+}
+
 function Invoke-TriadeRestrictedProbe {
     param([Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
     $null = Get-TriadeCertificateCheck -Certificate $Certificate
-    $handler = New-TriadeRestrictedHandler -Certificate $Certificate
-    $client = [Net.Http.HttpClient]::new($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds(15)
-    $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get,[Uri]'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/docs/index')
-    $response = $null
+    $handler=$null;$client=$null;$request=$null;$response=$null
     try {
+        $handler = New-TriadeRestrictedHandler -Certificate $Certificate
+        $client = [Net.Http.HttpClient]::new($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds(15)
+        $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get,[Uri]'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/docs/index')
         $response = $client.SendAsync($request,[Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-        return [PSCustomObject]@{ attempted=$true; http_status=[int]$response.StatusCode; message='Servidor respondeu. Isso não confirma autorização de emissão, procuração ou credenciamento.' }
+        return [PSCustomObject]@{ attempted=$true; http_status=[int]$response.StatusCode; failure=$null; message='Servidor respondeu. Isso não confirma autorização de emissão, procuração ou credenciamento.' }
     } catch {
-        return [PSCustomObject]@{ attempted=$true; http_status=$null; message='Conexão TLS/HTTP não concluída. Se usou A1 temporário, tente selecionar o certificado já instalado no Windows. Não houve envio fiscal; não há fallback para gravar a chave.' }
+        $failure=Get-TriadeConnectionFailure -Exception $_.Exception
+        return [PSCustomObject]@{ attempted=$true; http_status=$null; failure=$failure; message=$failure.message }
     } finally {
         if ($null -ne $response) { $response.Dispose() }
-        $request.Dispose(); $client.Dispose()
+        if ($null -ne $request) { $request.Dispose() }
+        if ($null -ne $client) { $client.Dispose() } elseif ($null -ne $handler) { $handler.Dispose() }
     }
 }
 
-Export-ModuleMember -Function Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe
+Export-ModuleMember -Function Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe,Get-TriadeConnectionFailure

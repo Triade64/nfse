@@ -37,6 +37,17 @@ try {
         $blocked=$false;try { $null=Import-TriadeLocalA1 -Path $path -Password $bad } catch { $blocked=$true }
         if (-not $blocked) { throw 'Senha errada nao bloqueada.' }
     } finally { $bad.Dispose() }
+    $native=[ComponentModel.Win32Exception]::new([Convert]::ToInt32('8009030E',16),'SEGREDO-FICTICIO-NAO-MOSTRAR')
+    $outer=[Net.Http.HttpRequestException]::new('CAMINHO-FICTICIO-NAO-MOSTRAR',$native)
+    $failure=Get-TriadeConnectionFailure -Exception $outer
+    if ($failure.category -ne 'credentials' -or $failure.codes -notmatch '8009030E') { throw 'Codigo Schannel nao classificado.' }
+    if (($failure|ConvertTo-Json) -match 'SEGREDO|CAMINHO') { throw 'Mensagem interna exposta.' }
+    $trust=Get-TriadeConnectionFailure -Exception ([ComponentModel.Win32Exception]::new([Convert]::ToInt32('80090325',16)))
+    if ($trust.category -ne 'trust') { throw 'Confianca nao classificada.' }
+    $timeout=Get-TriadeConnectionFailure -Exception ([Threading.Tasks.TaskCanceledException]::new())
+    if ($timeout.category -ne 'timeout') { throw 'Timeout nao classificado.' }
+    $socket=Get-TriadeConnectionFailure -Exception ([Net.Sockets.SocketException]::new(11001))
+    if ($socket.category -ne 'network') { throw 'Rede nao classificada.' }
     & (Join-Path $root 'ConectorTriade.ps1') -SelfTest
     Write-Output 'PASS: parser Windows PowerShell, validade, chave privada, importacao efemera, senha incorreta e handler sem redirects. Sem rede ou certificados reais.'
 } finally {

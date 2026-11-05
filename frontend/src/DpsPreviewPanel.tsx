@@ -29,9 +29,9 @@ export function DpsPreviewPanel(){
    const result=await response.json();if(!response.ok)throw Error(typeof result.detail==='string'?result.detail:'Confira os campos da preparação fiscal.');
    if(reserve){
     const a=document.createElement('a');a.href='/api/dps/'+result.id+'/xml';a.download=result.identifier+'.xml';a.click();
-    setDone((result.existing?'Este rascunho já tinha DPS reservada: ':'Reservada: ')+'série '+result.series+', número '+result.number+'. O XML gravado foi baixado. Assine e envie pelo conector 0.8.4.');
+    setDone((result.existing?'Este rascunho já tinha DPS reservada: ':'Reservada: ')+'série '+result.series+', número '+result.number+'. O XML gravado foi baixado. Assine e envie pelo conector 0.8.5.');
    }else{
-    const url=URL.createObjectURL(new Blob([result.xml],{type:'application/xml;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='Triade_DPS_Previa_Teste.xml';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setDone(result.warning+' Abra o arquivo no conector 0.8.4 para conferir e assinar localmente.');
+    const url=URL.createObjectURL(new Blob([result.xml],{type:'application/xml;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='Triade_DPS_Previa_Teste.xml';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setDone(result.warning+' Abra o arquivo no conector 0.8.5 para conferir e assinar localmente.');
    }
   }catch(e){setError((e as Error).message)}finally{setBusy(false)}
  }

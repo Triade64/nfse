@@ -1,6 +1,6 @@
 # Numeração central de DPS — versão 0.6.0
 
-Atualizado em 05/11/2026. Pré-requisito: o operador confirmou a primeira DPS de teste do escritório **autorizada (HTTP 201) em produção restrita** pelo conector 0.8.4, após as revisões E0008 (fuso) e E0120 (omissão da IM).
+Atualizado em 05/11/2026. Correção posterior: a autorização relatada naquele momento não existia. O histórico do conector mostrou a DPS nº 1 rejeitada com E0008, E0120 e depois E0625, e a nº 2 rejeitada com E0712. A primeira NFS-e autorizada foi a da DPS série 1 nº 3, ainda em 05/11/2026 (veja TESTE_UNITARIO_0_8.md, atualização 0.8.5).
 
 ## O que muda
 

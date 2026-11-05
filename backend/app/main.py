@@ -140,7 +140,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.7.1',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.7.2',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -183,7 +183,7 @@ def download_local_connector(u=Depends(current_user)):
         for path in sorted(SCHEMA_DIR.glob('*.xsd')):
             archive.writestr('Triade_Conector_Local/schemas/'+path.name,path.read_bytes())
     output.seek(0)
-    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_8_4.zip"'})
+    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_8_5.zip"'})
 
 @app.post('/api/drafts/{id}/restricted-preview')
 def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Depends(db_session)):

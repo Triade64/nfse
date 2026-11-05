@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.8.1 - DIAGNOSTICO POR ETAPA
+TRIADE NFS-e | CONECTOR LOCAL 0.8.5 - RECONHECE A AUTORIZACAO REAL (idDps)
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -83,3 +83,10 @@ Depois, Enviar 1 DPS de teste com a nova copia exige confirmacao especifica E012
 A correcao fica vinculada por correcao-im.json e usa ajuste-im/IdDPS, sem apagar ou zerar o historico anterior. A cadeia E0008 -> ajuste-fuso -> E0120 -> ajuste-im e seguida automaticamente antes de comparar a nova copia com o documento correto. Isso evita TIMEZONE_REVISION_INVALID ao revisar IM depois de uma revisao de fuso.
 Timeout, resultado desconhecido e reenvio continuam bloqueados. Consultar resultado nao faz POST. Producao real bloqueada. Testes automatizados usam transporte e dados ficticios; aceitacao real da correcao ainda depende do retorno da API.
 No site, novas previas exigem selecionar explicitamente se a inscricao municipal deve ser incluida ou omitida no XML. O campo cadastral e preservado. Confira a exigencia CNC de cada emitente; nao aplique a todos a regra recebida para este teste.
+
+
+VERSAO 0.8.5 - RECONHECE A RESPOSTA REAL DE AUTORIZACAO
+Na primeira autorizacao real (05/11/2026, DPS serie 1 n 3) a API respondeu HTTP 201 com idDps igual ao Id da NFS-e ("NFS" + chave de acesso), e nao ao Id da DPS como descreve o Swagger. A versao 0.8.4 tratou isso como RESPONSE_ID e marcou "Situacao desconhecida; consultar", embora a NFS-e estivesse autorizada.
+A 0.8.5 aceita idDps igual ao Id da DPS OU exatamente "NFS" + a chave de 50 digitos devolvida, no envio e na consulta. Qualquer outro valor continua bloqueado. As conferencias que realmente vinculam a nota a SUA DPS nao mudaram: XSD da NFS-e, Id NFS+chave, Id da DPS, ambiente 2, CNPJ, competencia e valor dentro do XML devolvido.
+Se o envio anterior ficou como "Situacao desconhecida; consultar": atualize o conector, selecione o certificado e use SOMENTE Consultar resultado com o MESMO XML assinado. A consulta faz HEAD/GET, recupera a NFS-e e grava "Autorizada em teste" com a chave. Nenhum POST e feito. Nao envie de novo nem use outro numero para a mesma nota.
+Producao real continua bloqueada.

@@ -117,6 +117,26 @@ try{
  $result=Invoke-Case $case $true
  if($result.state -ne 'Autorizada em teste' -or @($case.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 0){throw 'DPS existente enviada de novo.'}
  if(($case.handler.Calls|ForEach-Object{$_.Split(' ')[0]}) -join ',' -ne 'HEAD,GET,GET'){throw 'Sequencia de consulta nao segue o contrato HEAD/GET.'}
+ # 0.8.5: the real restricted API answered the first authorization with idDps = "NFS" + access key (the NFS-e Id).
+ $idField='"idDps":"'+$review.identifier+'"'
+ if(-not $success.Contains($idField)){throw 'Fixture de sucesso sem idDps esperado.'}
+ $successNfs=$success.Replace($idField,'"idDps":"NFS'+$key+'"');$foundNfs=$found.Replace($idField,'"idDps":"NFS'+$key+'"')
+ $case=New-FakeClient 'sucesso-id-nfse' @(404,201) @($missing,$successNfs);$clients+=$case
+ $result=Invoke-Case $case $true
+ if($result.state -ne 'Autorizada em teste' -or $result.http_status -ne 201){throw ('Resposta real com idDps=NFS+chave nao reconhecida. '+($result|ConvertTo-Json -Compress))}
+ $state=[IO.File]::ReadAllText((Join-Path (Join-Path $case.root $review.identifier) 'estado.json'))|ConvertFrom-Json
+ if($state.access_key -ne $key -or $state.nfse_sha256.Length -ne 64){throw 'Chave da NFS-e nao gravada.'}
+ $case=New-FakeClient 'consulta-id-nfse' @(200,200,200) @('',$foundNfs,$successNfs);$clients+=$case
+ $result=Invoke-Case $case $false
+ if($result.state -ne 'Autorizada em teste' -or @($case.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 0){throw 'Consulta com idDps=NFS+chave nao recuperou a NFS-e.'}
+ $otherKey=$key.Substring(0,49)+([string](([int][string]$key[49]+1)%10))
+ foreach($scenario in @(@{name='id-nfse-de-outra-chave';body=$success.Replace($idField,'"idDps":"NFS'+$otherKey+'"')},@{name='id-arbitrario';body=$success.Replace($idField,'"idDps":"QUALQUER"')},@{name='id-minusculo';body=$success.Replace($idField,'"idDps":"nfs'+$key+'"')})){
+  $case=New-FakeClient $scenario.name @(404,201,404) @($missing,$scenario.body,$missing);$clients+=$case
+  $result=Invoke-Case $case $true
+  if($result.state -ne 'Situação desconhecida; consultar' -or $result.diagnostic.reason -ne 'RESPONSE_ID'){throw ('idDps inesperado foi aceito: '+$scenario.name)}
+  $null=Invoke-Case $case $true
+  if(@($case.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 1){throw 'idDps inesperado permitiu reenvio.'}
+ }
  $case=New-FakeClient 'adulterado' @(404,201) @($missing,$success);$clients+=$case
  $tampered=([Text.Encoding]::UTF8.GetString($SignedBytes)).Replace('<vServ>10.00</vServ>','<vServ>11.00</vServ>')
  $blocked=$false;try{$null=Invoke-TriadeSingleRestrictedDps -Bytes ([Text.Encoding]::UTF8.GetBytes($tampered)) -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $case.root -Client $case.client -ConfirmRestrictedSend}catch{$blocked=$true}
@@ -137,4 +157,5 @@ try{
  & (Join-Path $PSScriptRoot 'Test-Im.ps1') -Certificate $Certificate -SchemaDirectory $SchemaDirectory -Directory $Directory -Success $success
  Write-Output 'PASS: diagnostico seguro de timeout antes e depois do POST, ambiente zero em sucesso bloqueado e falha de gravacao, sem mensagem interna ou caminho privado.'
  Write-Output 'PASS: transporte simulado, confirmacao, journal antes do POST, 201/400/500, timeout, consulta sem reenvio, ambiente incorreto, redirect, GZip e verbos aprovados. Nenhuma chamada fiscal real.'
+ Write-Output 'PASS: 0.8.5 aceita idDps igual ao Id da DPS ou a NFS+chave (formato real), no envio e na consulta; recusa outra chave, valor arbitrario ou caixa diferente sem reenvio.'
 }finally{foreach($item in $clients){$item.client.Dispose()}}

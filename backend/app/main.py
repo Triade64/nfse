@@ -10,8 +10,9 @@ import time
 import zipfile
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
+from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,10 +22,10 @@ from sqlalchemy.exc import IntegrityError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import CLOUD,allowed_hosts,allowed_origins
 from .db import Base, engine, Session, ROOT, DATA, URL
-from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access
+from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access, DPS, DpsSeries
 from .security import current_user, db_session, hasher, role, allowed_company, company_ids, issue_session
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
-from .dps_preview import PreviewOptions, build_preview, SCHEMA_DIR
+from .dps_preview import PreviewOptions, ReserveOptions, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, SERIES_PATTERN, BRASILIA
 from argon2.exceptions import VerificationError, InvalidHashError
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
@@ -137,7 +138,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.5.0',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.6.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -198,6 +199,94 @@ def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Dep
     db.commit()
     return {'xml':xml.decode('utf-8'),'sha256':digest,'environment':2,'submitted':False,'number_reserved':False,
             'warning':'Prévia offline validada no XSD. Numeração não reservada. Regras fiscais e aceitação da assinatura na API pendentes.'}
+
+RESTRICTED_ENV='2'
+
+def batch_has_dps(db,batch_id):
+    return db.scalar(select(DPS.id).join(Draft,DPS.draft_id==Draft.id).where(Draft.batch_id==batch_id).limit(1)) is not None
+
+def dps_public(x):
+    data=serialize(x);data.pop('xml',None);return data
+
+class SeriesInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    series:str=Field(pattern=SERIES_PATTERN)
+    next_number:int=Field(ge=1,le=999999999999999)
+    expected_revision:int|None=None
+    confirm_unused:Literal[True]
+
+@app.get('/api/companies/{id}/dps-series')
+def list_series(id:int,u=Depends(current_user),db=Depends(db_session)):
+    role(u,['admin']);get_or_404(db,Company,id)
+    return [serialize(s) for s in db.scalars(select(DpsSeries).where(DpsSeries.company_id==id).order_by(DpsSeries.environment,DpsSeries.series))]
+
+@app.put('/api/companies/{id}/dps-series')
+def save_series(id:int,data:SeriesInput,u=Depends(current_user),db=Depends(db_session)):
+    """Sets the next number of a series. It can only move forward, past every number already reserved centrally."""
+    role(u,['admin'])
+    if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+    c=get_or_404(db,Company,id);series=normalize_series(data.series)
+    query=select(DpsSeries).where(DpsSeries.company_id==id,DpsSeries.environment==RESTRICTED_ENV,DpsSeries.series==series)
+    if not URL.startswith('sqlite'):query=query.with_for_update()
+    s=db.scalar(query)
+    if (s.revision if s else None)!=data.expected_revision:raise HTTPException(409,'Série alterada por outra operação. Recarregue.')
+    used=db.scalar(select(func.max(DPS.number)).where(DPS.company_id==id,DPS.environment==RESTRICTED_ENV,DPS.series==series)) or 0
+    if data.next_number<=used:raise HTTPException(409,f'O próximo número deve ser maior que {used}, já reservado nesta série.')
+    if s and data.next_number<s.next_number:raise HTTPException(409,'A numeração não pode retroceder. Números já liberados nunca são reutilizados.')
+    previous=s.next_number if s else None
+    if not s:s=DpsSeries(company_id=c.id,environment=RESTRICTED_ENV,series=series,next_number=data.next_number);db.add(s)
+    else:s.next_number=data.next_number;s.revision+=1
+    db.flush();audit(db,u,'save_dps_series','company',c.id,{'series':series,'environment':RESTRICTED_ENV,'previous_next_number':previous,'next_number':data.next_number})
+    db.commit();return serialize(s)
+
+@app.post('/api/drafts/{id}/dps')
+def reserve_dps(id:int,data:ReserveOptions,u=Depends(current_user),db=Depends(db_session)):
+    """Reserves the next number transactionally and stores the exact unsigned XML. Idempotent per draft."""
+    role(u,['admin'])
+    if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+    d=get_or_404(db,Draft,id,locked=True)
+    b=get_or_404(db,Batch,d.batch_id);batch_access(db,u,b)
+    existing=db.scalar(select(DPS).where(DPS.draft_id==d.id))
+    if existing:return {**dps_public(existing),'existing':True}
+    if b.revision!=data.revision:raise HTTPException(409,'Lote alterado. Reabra a conferência.')
+    if d.raw!=data.expected_raw:raise HTTPException(409,'Rascunho alterado. Recarregue a tela antes de reservar.')
+    if d.errors or not d.fingerprint or not d.company_id:raise HTTPException(422,'Valide o rascunho sem inconsistências antes de reservar a numeração.')
+    c=get_or_404(db,Company,d.company_id);allowed_company(db,u,c.id)
+    if c.revision!=d.company_revision:raise HTTPException(409,'Cadastro da empresa alterado após a validação. Revalide o lote.')
+    series=normalize_series(data.series)
+    query=select(DpsSeries).where(DpsSeries.company_id==c.id,DpsSeries.environment==RESTRICTED_ENV,DpsSeries.series==series)
+    if not URL.startswith('sqlite'):query=query.with_for_update()
+    s=db.scalar(query)
+    if not s:raise HTTPException(409,'Série sem numeração configurada para esta empresa. Configure o próximo número antes de reservar.')
+    number=str(s.next_number)
+    issued_at=datetime.now(timezone.utc).replace(microsecond=0)-timedelta(minutes=1)
+    try:xml=build_dps(d.raw,serialize(c),data,data.own_company_cnpj,series,number,issued_at,'Triade-Web-0.6')
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+    digest=hashlib.sha256(xml).hexdigest()
+    municipality=str(c.config.get('municipio_ibge',''))
+    x=DPS(draft_id=d.id,environment=RESTRICTED_ENV,identifier=dps_identifier(municipality,c.cnpj,series,number),xml_sha256=digest,
+          company_id=c.id,series=series,number=s.next_number,status='Reservada',issued_at=issued_at.astimezone(BRASILIA).isoformat(),xml=xml.decode('utf-8'),created_by=u.id)
+    s.next_number+=1;s.revision+=1
+    db.add(x);db.flush()
+    audit(db,u,'reserve_dps','draft',d.id,{'dps_id':x.id,'series':series,'number':s.next_number-1,'environment':RESTRICTED_ENV,'xml_sha256':digest,'batch_revision':b.revision})
+    db.commit()
+    return {**dps_public(x),'existing':False}
+
+@app.get('/api/dps')
+def list_dps(batch_id:int|None=None,u=Depends(current_user),db=Depends(db_session)):
+    role(u,['admin'])
+    query=select(DPS).order_by(DPS.id.desc()).limit(500)
+    if batch_id is not None:query=query.join(Draft,DPS.draft_id==Draft.id).where(Draft.batch_id==batch_id)
+    return [dps_public(x) for x in db.scalars(query)]
+
+@app.get('/api/dps/{id}/xml')
+def dps_xml(id:int,u=Depends(current_user),db=Depends(db_session)):
+    role(u,['admin'])
+    x=get_or_404(db,DPS,id)
+    if not x.xml:raise HTTPException(404,'XML não armazenado para esta DPS.')
+    if x.company_id:allowed_company(db,u,x.company_id)
+    audit(db,u,'download_dps_xml','dps',x.id,{'xml_sha256':x.xml_sha256});db.commit()
+    return Response(x.xml.encode('utf-8'),media_type='application/xml',headers={'Content-Disposition':f'attachment; filename="{x.identifier}.xml"'})
 
 @app.get('/api/setup')
 def setup_status(db=Depends(db_session)):
@@ -362,6 +451,8 @@ def save_preparation(data,db,u,b=None):
             raise HTTPException(409,'Lote processado ou alterado. Reabra a versão atual antes de editar.')
         if db.scalar(select(Job.id).join(Draft,Job.draft_id==Draft.id).where(Draft.batch_id==b.id)):
             raise HTTPException(409,'Lote já enviado à fila; prepare outro lote.')
+        if batch_has_dps(db,b.id):
+            raise HTTPException(409,'Lote com DPS numerada; a edição está bloqueada. Prepare outro lote.')
     else:
         b=Batch(name=data.name,owner_id=u.id);db.add(b);db.flush()
     current={d.id:d for d in db.scalars(select(Draft).where(Draft.batch_id==b.id))}
@@ -533,6 +624,7 @@ def edit_row(id:int,data:EditRow,u=Depends(current_user),db=Depends(db_session))
     if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
     d=get_or_404(db,Draft,id);b=get_or_404(db,Batch,d.batch_id,locked=True);batch_access(db,u,b)
     if b.status in LOCKED or b.revision!=data.revision:raise HTTPException(409,'Lote processado ou alterado por outra operação. Recarregue.')
+    if batch_has_dps(db,b.id):raise HTTPException(409,'Lote com DPS numerada; a edição está bloqueada. Prepare outro lote.')
     if set(data.raw)-set(HEADERS) or any(len(str(v))>10000 for v in data.raw.values()):raise HTTPException(422,'Campos inválidos')
     d.raw={k:cell_text(v) for k,v in data.raw.items()};validate_batch(db,u,b);audit(db,u,'edit','draft',id);db.commit();return serialize(b)
 @app.post('/api/batches/{id}/validate')
@@ -541,6 +633,7 @@ def revalidate(id:int,u=Depends(current_user),db=Depends(db_session)):
     if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
     b=get_or_404(db,Batch,id,locked=True);batch_access(db,u,b)
     if b.status in LOCKED:raise HTTPException(409,'Lote já processado')
+    if batch_has_dps(db,b.id):raise HTTPException(409,'Lote com DPS numerada; a revalidação está bloqueada.')
     validate_batch(db,u,b);audit(db,u,'validate','batch',id);db.commit();return review(db,b)
 class Approval(BaseModel):
     digest:str

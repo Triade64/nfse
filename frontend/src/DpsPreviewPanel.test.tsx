@@ -23,3 +23,20 @@ it('requires explicit fiscal choices and reports a changed draft without downloa
  const [url,init]=fetcher.mock.calls[2];expect(url).toBe('/api/drafts/7/restricted-preview');
  const payload=JSON.parse(init.body);expect(payload.issued_at).toBe('2026-11-05T10:00-03:00');expect(payload.expected_raw).toEqual(raw);expect(payload.confirm_offline).toBe(true);expect(payload.include_provider_im).toBe(false);expect(payload.include_iss_rate).toBe(false);
 });
+it('reserve mode posts to the numbering endpoint without manual number or instant',async()=>{
+ const raw={cnpj_emitente:'11222333000181',nome_tomador:'FICTICIO',competencia:'2026-11-05',valor_servico:'10.00',iss_aliquota:'2.00'};
+ const fetcher=vi.fn().mockResolvedValueOnce({ok:true,json:async()=>[{id:7,batch_id:2,raw}]}).mockResolvedValueOnce({ok:true,json:async()=>({revision:3})}).mockResolvedValueOnce({ok:true,json:async()=>({id:5,identifier:'DPSX',series:'1',number:42,existing:false})});
+ vi.stubGlobal('fetch',fetcher);const click=vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(()=>{});render(<DpsPreviewPanel/>);
+ await screen.findByRole('option',{name:/#7/});
+ fireEvent.change(screen.getByLabelText('Numeração'),{target:{value:'reserve'}});
+ expect(screen.queryByLabelText('Número da DPS de teste (não reservado)')).toBeNull();
+ fireEvent.change(screen.getByLabelText('Rascunho'),{target:{value:'7'}});
+ const inputs:Record<string,string>={'CNPJ do próprio escritório':'11222333000181','Série (numeração central)':'1','Inscrição municipal no XML — conferir exigência do CNC':'omit','Situação no Simples Nacional':'1','Regime especial municipal':'0','Informação da alíquota de ISS':'omit','Informação dos tributos totais':'not_informed'};
+ for(const [label,value] of Object.entries(inputs))fireEvent.change(screen.getByLabelText(label),{target:{value}});
+ fireEvent.click(screen.getByRole('checkbox'));
+ const button=screen.getByRole('button',{name:'Reservar número e baixar DPS'});fireEvent.submit(button.closest('form')!);
+ await waitFor(()=>expect(screen.getByRole('status').textContent).toContain('número 42'));
+ const [url,init]=fetcher.mock.calls[2];expect(url).toBe('/api/drafts/7/dps');
+ const payload=JSON.parse(init.body);expect(payload.confirm_reserve).toBe(true);expect(payload.number).toBeUndefined();expect(payload.issued_at).toBeUndefined();expect(payload.reg_ap_trib_sn).toBeNull();
+ expect(click).toHaveBeenCalled();
+});

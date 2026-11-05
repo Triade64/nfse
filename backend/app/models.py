@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, ForeignKey, Integer, JSON, UniqueConstraint, Text
+from sqlalchemy import String, ForeignKey, Integer, JSON, UniqueConstraint, Text, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -73,14 +73,34 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String(40), default='Na fila')
     mode: Mapped[str] = mapped_column(String(20), default='simulation')
     result: Mapped[dict] = mapped_column(JSON, default=dict)
+class DpsSeries(Base):
+    """Central DPS numbering per issuer/environment/series. Numbers only move forward and are never reused."""
+    __tablename__ = 'dps_series'
+    __table_args__ = (UniqueConstraint('company_id', 'environment', 'series'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey('companies.id'))
+    environment: Mapped[str] = mapped_column(String(1))
+    series: Mapped[str] = mapped_column(String(5))
+    next_number: Mapped[int] = mapped_column(BigInteger)
+    revision: Mapped[int] = mapped_column(default=1)
 class DPS(Base):
     __tablename__ = 'dps'
+    __table_args__ = (UniqueConstraint('company_id', 'environment', 'series', 'number', name='uq_dps_number'),)
     id: Mapped[int] = mapped_column(primary_key=True)
     draft_id: Mapped[int] = mapped_column(ForeignKey('drafts.id'), unique=True)
     environment: Mapped[str] = mapped_column(String(20))
     identifier: Mapped[str] = mapped_column(String(80), unique=True)
     xml_path: Mapped[str | None] = mapped_column(nullable=True)
     xml_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Columns added in 0.6.0 (nullable for an additive migration of the existing table).
+    company_id: Mapped[int | None] = mapped_column(ForeignKey('companies.id'), nullable=True)
+    series: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    issued_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    xml: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=now)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
 class NFSe(Base):
     __tablename__ = 'nfse'
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -6,13 +6,14 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Este c
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Import-Module (Join-Path $PSScriptRoot 'TriadeConnector.Core.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'TriadeDps.psm1') -Force
 [Windows.Forms.Application]::EnableVisualStyles()
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.6'
-$form.ClientSize = [Drawing.Size]::new(720,650)
-$form.MinimumSize = [Drawing.Size]::new(736,689)
+$form.Text = 'Tríade NFS-e | Conector local 0.7'
+$form.ClientSize = [Drawing.Size]::new(720,705)
+$form.MinimumSize = [Drawing.Size]::new(736,744)
 $form.StartPosition = 'CenterScreen'
 $form.Font = [Drawing.Font]::new('Segoe UI',10)
 $form.BackColor = [Drawing.Color]::FromArgb(245,248,246)
@@ -34,8 +35,43 @@ $run=[Windows.Forms.Button]::new();$run.Text='Verificar';$run.SetBounds(22,444,1
 $copy=[Windows.Forms.Button]::new();$copy.Text='Copiar resultado';$copy.Enabled=$false;$copy.SetBounds(196,444,185,38);$form.Controls.Add($copy)
 $saveApi=[Windows.Forms.Button]::new();$saveApi.Text='Salvar OpenAPI';$saveApi.SetBounds(397,444,170,38);$form.Controls.Add($saveApi)
 $apiProbe=[Windows.Forms.Button]::new();$apiProbe.Text='Testar API';$apiProbe.SetBounds(580,444,117,38);$form.Controls.Add($apiProbe)
-$output=[Windows.Forms.TextBox]::new();$output.Multiline=$true;$output.ReadOnly=$true;$output.ScrollBars='Vertical';$output.SetBounds(22,495,675,130);$form.Controls.Add($output)
+$output=[Windows.Forms.TextBox]::new();$output.Multiline=$true;$output.ReadOnly=$true;$output.ScrollBars='Vertical';$output.SetBounds(22,550,675,130);$form.Controls.Add($output)
 
+$signDps=[Windows.Forms.Button]::new();$signDps.Text='Conferir e assinar XML local (sem envio)';$signDps.SetBounds(22,495,675,38);$form.Controls.Add($signDps)
+$signDps.Add_Click({
+    if($null -eq $script:selectedCertificate){$output.Text='Selecione o certificado instalado no Windows para a assinatura offline.';return}
+    $open=[Windows.Forms.OpenFileDialog]::new();$open.Filter='DPS XML (*.xml)|*.xml';$open.Title='Abrir prévia de DPS do próprio escritório'
+    $save=$null;$bytes=$null;$signedBytes=$null
+    try {
+        if($open.ShowDialog() -ne [Windows.Forms.DialogResult]::OK){return}
+        if(([IO.FileInfo]::new($open.FileName)).Length -gt 2097152){throw 'XML_SIZE'}
+        $bytes=[IO.File]::ReadAllBytes($open.FileName)
+        $xml=Read-TriadeDps -Bytes $bytes -SchemaDirectory (Join-Path $PSScriptRoot 'schemas')
+        $review=Get-TriadeDpsReview -Document $xml
+        $message=@('Assinar somente no PC, sem envio à API?',('Emitente: '+$review.cnpj),('Tomador: '+$review.recipient),('Competência: '+$review.competence),('Valor: R$ '+$review.amount),'Confirme que este emitente é o próprio escritório, titular do certificado selecionado.','O arquivo assinado contém dados fiscais e o certificado público. A chave privada permanece no Windows.','Perfil XMLDSIG do manual integrado: aceitação na API de testes ainda não validada.') -join [Environment]::NewLine
+        if([Windows.Forms.MessageBox]::Show($form,$message,'Tríade | Assinatura offline',[Windows.Forms.MessageBoxButtons]::YesNo,[Windows.Forms.MessageBoxIcon]::Information) -ne [Windows.Forms.DialogResult]::Yes){return}
+        $signedBytes=Sign-TriadeOfflineDps -Bytes $bytes -Certificate $script:selectedCertificate -SchemaDirectory (Join-Path $PSScriptRoot 'schemas') -OwnCnpj $review.cnpj
+        $save=[Windows.Forms.SaveFileDialog]::new();$save.Filter='DPS XML (*.xml)|*.xml';$save.FileName='DPS_Teste_Assinada.xml';$save.Title='Salvar em novo arquivo local'
+        if($save.ShowDialog() -ne [Windows.Forms.DialogResult]::OK){return}
+        # CreateNew protects the original XML and any existing file.
+        $file=[IO.File]::Open($save.FileName,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        try{$file.Write($signedBytes,0,$signedBytes.Length)}finally{$file.Dispose()}
+        $script:lastSummary=@('Tríade NFS-e | preparação local 0.7','XML de produção restrita validado no XSD recebido.','Assinatura criada e integridade criptográfica conferida localmente.','CNPJ do prestador confere com o OID CNPJ do certificado.','Não foram validados cadeia ICP-Brasil, revogação, credenciamento ou aceitação da assinatura na API.','Arquivo salvo somente no PC. Nenhuma DPS enviada. Produção continua bloqueada.') -join [Environment]::NewLine
+        $output.Text=$script:lastSummary;$copy.Enabled=$true
+    } catch {
+        $code='OFFLINE_PREPARATION_FAILED'
+        foreach($candidate in @('XML_SIZE','XML_ROOT','XML_ID','RESTRICTED_OWN_ONLY','OWN_CNPJ_REQUIRED','ALREADY_SIGNED','CERT_CNPJ_MISMATCH','RSA_REQUIRED','SIGNATURE_CHECK_FAILED')){
+            $exception=$_.Exception
+            for($i=0;$i -lt 6 -and $null -ne $exception;$i++){if($exception.Message -eq $candidate){$code=$candidate};$exception=$exception.InnerException}
+        }
+        $script:lastSummary='Não foi possível preparar a DPS. Código: '+$code+'. Confira se é XML de testes válido, se o certificado pertence ao emitente e se o destino é um arquivo novo. Nenhuma DPS enviada.'
+        $output.Text=$script:lastSummary;$copy.Enabled=$true
+    } finally {
+        $open.Dispose();if($null -ne $save){$save.Dispose()}
+        if($null -ne $bytes){[Array]::Clear($bytes,0,$bytes.Length)}
+        if($null -ne $signedBytes){[Array]::Clear($signedBytes,0,$signedBytes.Length)}
+    }
+})
 $windowsButton.Add_Click({
     $available=$null;$picked=$null;$phase='leitura do repositório CurrentUser/My'
     try {
@@ -81,7 +117,7 @@ $run.Add_Click({
             $temporary=Import-TriadeLocalA1 -Path $fileBox.Text -Password $secure;$active=$temporary
         }
         $check=Get-TriadeCertificateCheck -Certificate $active
-        $lines=@('Tríade NFS-e | diagnóstico local 0.6',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
+        $lines=@('Tríade NFS-e | diagnóstico local 0.7',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
         if ($null -ne $temporary) { $lines+='Origem: arquivo A1 temporário (chave efêmera).' } else { $lines+='Origem: certificado instalado no Windows.' }
         $lines+=('PowerShell: '+$PSVersionTable.PSVersion.ToString()+' | .NET: '+[Environment]::Version.ToString())
         if ($network.Checked) {
@@ -105,7 +141,7 @@ $apiProbe.Add_Click({
     $apiProbe.Enabled=$false;$saveApi.Enabled=$false;$run.Enabled=$false;$windowsButton.Enabled=$false;$fileButton.Enabled=$false;$form.UseWaitCursor=$true;$output.Text='Consultando rota de diagnóstico...';$form.Refresh()
     try {
         $probe=Invoke-TriadeRestrictedApiProbe -Certificate $script:selectedCertificate
-        $lines=@('Tríade NFS-e | teste API somente de leitura 0.6','Ambiente: produção restrita. Origem: certificado instalado no Windows.','Método: HEAD /dps/diagnostico-local (identificador intencionalmente inválido).')
+        $lines=@('Tríade NFS-e | teste API somente de leitura 0.7','Ambiente: produção restrita. Origem: certificado instalado no Windows.','Método: HEAD /dps/diagnostico-local (identificador intencionalmente inválido).')
         if ($null -ne $probe.http_status) { $lines+=('HTTP '+$probe.http_status) };$lines+=$probe.message
         if ($null -ne $probe.failure) { $lines+=('Categoria: '+$probe.failure.category+' | Códigos: '+$probe.failure.codes);$lines+=('Tipos: '+$probe.failure.types) }
         $lines+='Nenhuma DPS enviada. Produção continua bloqueada.'

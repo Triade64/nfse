@@ -24,6 +24,7 @@ from .db import Base, engine, Session, ROOT, DATA, URL
 from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access
 from .security import current_user, db_session, hasher, role, allowed_company, company_ids, issue_session
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
+from .dps_preview import PreviewOptions, build_preview, SCHEMA_DIR
 from argon2.exceptions import VerificationError, InvalidHashError
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
@@ -170,14 +171,33 @@ class SetupInput(Credentials):
 def download_local_connector(u=Depends(current_user)):
     role(u,['admin'])
     package=ROOT/'local_connector'
-    names=['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','LEIA-ME.txt']
-    if any(not (package/name).is_file() for name in names):
+    names=['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','LEIA-ME.txt']
+    if any(not (package/name).is_file() for name in names) or len(list(SCHEMA_DIR.glob('*.xsd')))!=10:
         raise HTTPException(503,'Pacote do conector ainda não disponível neste deployment.')
     output=io.BytesIO()
     with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
         for name in names:archive.writestr('Triade_Conector_Local/'+name,(package/name).read_bytes())
+        for path in sorted(SCHEMA_DIR.glob('*.xsd')):
+            archive.writestr('Triade_Conector_Local/schemas/'+path.name,path.read_bytes())
     output.seek(0)
-    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_6.zip"'})
+    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_7.zip"'})
+
+@app.post('/api/drafts/{id}/restricted-preview')
+def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Depends(db_session)):
+    role(u,['admin'])
+    d=get_or_404(db,Draft,id)
+    b=get_or_404(db,Batch,d.batch_id);batch_access(db,u,b)
+    if b.revision!=data.revision:raise HTTPException(409,'Lote alterado. Reabra a conferência.')
+    if d.raw!=data.expected_raw:raise HTTPException(409,'Rascunho alterado. Recarregue a tela antes de gerar a prévia.')
+    if not d.company_id:raise HTTPException(422,'Rascunho sem emitente cadastrado.')
+    c=get_or_404(db,Company,d.company_id);allowed_company(db,u,c.id)
+    try:xml=build_preview(d.raw,serialize(c),data)
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+    digest=hashlib.sha256(xml).hexdigest()
+    audit(db,u,'offline_dps_preview','draft',d.id,{'xml_sha256':digest,'environment':2,'batch_revision':b.revision,'number_reserved':False})
+    db.commit()
+    return {'xml':xml.decode('utf-8'),'sha256':digest,'environment':2,'submitted':False,'number_reserved':False,
+            'warning':'Prévia offline validada no XSD. Numeração não reservada. Regras fiscais e aceitação da assinatura na API pendentes.'}
 
 @app.get('/api/setup')
 def setup_status(db=Depends(db_session)):
@@ -651,7 +671,7 @@ if not CLOUD:
 @app.get('/api/health')
 def health():
     import os
-    return {'app_id':'triade-nfse','version':(ROOT/'VERSION').read_text().strip(),'instance':'cloud' if CLOUD else os.getenv('NFSE_INSTANCE','portable'),'local_connector_available':all((ROOT/'local_connector'/name).is_file() for name in ['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','LEIA-ME.txt'])}
+    return {'app_id':'triade-nfse','version':(ROOT/'VERSION').read_text().strip(),'instance':'cloud' if CLOUD else os.getenv('NFSE_INSTANCE','portable'),'local_connector_available':all((ROOT/'local_connector'/name).is_file() for name in ['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','LEIA-ME.txt'])}
 
 @app.post('/api/batches/{id}/process-simulation')
 def process_simulation(id:int,u=Depends(current_user),db=Depends(db_session)):

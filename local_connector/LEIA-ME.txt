@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.6 - DIAGNOSTICO
+TRIADE NFS-e | CONECTOR LOCAL 0.7 - PREPARACAO OFFLINE
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -11,7 +11,7 @@ Requer Windows 10/11 atualizado, Windows PowerShell 5.1 e .NET Framework 4.7.2 o
 
 O conector nao faz upload do arquivo, da senha ou da chave privada. Na autenticacao TLS, o certificado PUBLICO e as provas criptograficas sao apresentados ao servidor do governo. O A1 temporario usa EphemeralKeySet, sem instalar a chave; algumas combinacoes de Schannel/.NET nao aceitam essa chave para TLS. Nesse caso, selecione um certificado que ja esteja instalado no Windows. Nao ha fallback para persistir ou exportar a chave.
 
-Nao ha servidor HTTP local, pareamento com o site, emissao, assinatura de DPS, cancelamento ou atualizacao automatica nesta versao. O resultado e copiado manualmente. Nao sao validados cadeia ICP-Brasil, revogacao, procuracao ou credenciamento. HTTP 200 da documentacao nao confirma autorizacao fiscal. Certificados A3/token nao foram homologados.
+Nao ha servidor HTTP local, pareamento com o site, emissao, cancelamento ou atualizacao automatica nesta versao. O resultado e copiado manualmente. Nao sao validados cadeia ICP-Brasil, revogacao, procuracao ou credenciamento. HTTP 200 da documentacao nao confirma autorizacao fiscal. Certificados A3/token nao foram homologados.
 
 O certificado original continua onde voce o guardou. Feche o programa ao terminar. Nenhum log de certificado, senha ou nome do titular e gravado pelo conector. O Windows e o ambiente local continuam responsaveis pela seguranca da memoria, arquivos e certificados ja instalados.
 
@@ -24,3 +24,13 @@ Versao 0.4: apos selecionar certificado do Windows, use Salvar OpenAPI para salv
 Versao 0.5: a falha de exportacao mostra um motivo seguro (por exemplo, NO_REFERENCE). Nenhuma mensagem arbitraria de excecao, senha, caminho ou certificado e copiada para o resultado.
 
 Versao 0.6: Testar API faz somente HEAD /dps/diagnostico-local na base HTTPS do Swagger fornecido. O identificador e intencionalmente invalido; 400 e compativel com rejeicao de formato e nao confirma autorizacao de emissao. Nao ha corpo nem POST, consulta de nota real, reenvio ou fallback para outra URL. O teste exige certificado instalado e confirmacao.
+
+
+Versao 0.7 - PREPARACAO OFFLINE, SEM ENVIO
+No site, Configuracoes > Preparar DPS de teste: escolha um rascunho do proprio escritorio e confirme explicitamente suas configuracoes tributarias. Baixe a previa XML. A numeracao NAO e reservada e esse arquivo nao e nota autorizada.
+No conector, selecione o certificado instalado do escritorio e clique Conferir e assinar XML local. Escolha a previa, confira emitente/tomador/competencia/valor e confirme. Salve em arquivo NOVO. Arquivos existentes nao sao sobrescritos.
+O conector verifica o XSD restrito recebido em 20/10/2026, bloqueia tpAmb diferente de 2, exige tpEmit=1, confere o CNPJ do prestador com o OID ICP-Brasil CNPJ do SAN do certificado e assina sem exportar a chave. Certificados e-CPF e representacao de terceiros nao sao suportados nesta etapa.
+Perfil inicial: XMLDSIG RSA-SHA1, digest SHA1, enveloped + C14N, certificado publico final, conforme secao 6.1.4 do manual integrado oficial 1.00.02. A assinatura e verificada criptograficamente apos serializacao; a aceitacao desse perfil no ambiente restrito de 2026 AINDA depende de teste. Nenhuma protecao TLS e alterada.
+O XML assinado contem dados do documento e certificado PUBLICO. Guarde-o em pasta protegida. Chave privada, senha e arquivo PFX nao sao copiados para esse XML ou enviados ao site.
+Ainda nao sao verificados cadeia, revogacao, credenciamento, cadastro municipal, regras de negocio, IBS/CBS ou autorizacao fiscal. Nao existe envio de DPS nesta versao. Nao envie esse arquivo manualmente antes da revisao tecnica e fiscal.
+O gerador inicial atende apenas prestacao nacional tributavel de ISS sem retencoes, descontos, deducoes, beneficios ou suspensao. Nao mude dados tributarios para adaptar uma operacao que nao caiba no prototipo.

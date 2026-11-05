@@ -4,10 +4,12 @@ on:
     branches: [main]
     paths:
       - 'local_connector/**'
+      - 'schemas/restricted-20261020/**'
       - '.github/workflows/local-connector.yml'
   pull_request:
     paths:
       - 'local_connector/**'
+      - 'schemas/restricted-20261020/**'
       - '.github/workflows/local-connector.yml'
 permissions:
   contents: read

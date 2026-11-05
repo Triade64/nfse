@@ -2,12 +2,13 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
-foreach($name in @('ConectorTriade.ps1','TriadeConnector.Core.psm1')) {
+foreach($name in @('ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1')) {
     $tokens=$null;$errors=$null
     $null=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root $name),[ref]$tokens,[ref]$errors)
     if ($errors.Count -ne 0) { throw ('Falha no parser PowerShell: '+$name) }
 }
 Import-Module (Join-Path $root 'TriadeConnector.Core.psm1') -Force
+Import-Module (Join-Path $root 'TriadeDps.psm1') -Force
 # Exercise the same read-only store routine as the button; do not install any certificate.
 $installed=Get-TriadeWindowsCertificates
 if ($installed -isnot [Security.Cryptography.X509Certificates.X509Certificate2Collection]) { throw 'Colecao de certificados invalida.' }
@@ -20,6 +21,9 @@ $directory=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
 $null=New-Item -ItemType Directory -Path $directory
 try {
     $req=[Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=FICTICIO-SEM-VALIDADE-ICP',$key,[Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    # Synthetic SAN otherName 2.16.76.1.3.3, never a real taxpayer/certificate.
+    $san=[byte[]](0x30,0x1B,0xA0,0x19,0x06,0x05,0x60,0x4C,0x01,0x03,0x03,0xA0,0x10,0x0C,0x0E)+[Text.Encoding]::ASCII.GetBytes('11222333000181')
+    $req.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509Extension]::new('2.5.29.17',$san,$false))
     $now=[DateTimeOffset]::UtcNow
     $cert=$req.CreateSelfSigned($now.AddDays(-1),$now.AddDays(2))
     $result=Get-TriadeCertificateCheck -Certificate $cert
@@ -76,7 +80,30 @@ try {
     try {
         if ($apiRequest.Method.Method -ne 'HEAD' -or $apiRequest.RequestUri.AbsoluteUri -ne 'https://sefin.producaorestrita.nfse.gov.br/SefinNacional/dps/diagnostico-local' -or $null -ne $apiRequest.Content) { throw 'Diagnostico API nao esta restrito ao HEAD sem corpo.' }
     } finally { $apiRequest.Dispose() }
+    $schemaDirectory=Join-Path (Split-Path -Parent $root) 'schemas/restricted-20261020'
+    $unsigned=[IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'dps-ficticia.xml'))
+    $signedBytes=Sign-TriadeOfflineDps -Bytes $unsigned -Certificate $cert -SchemaDirectory $schemaDirectory -OwnCnpj '11222333000181'
+    $signedXml=Read-TriadeDps -Bytes $signedBytes -SchemaDirectory $schemaDirectory
+    $verifier=[Security.Cryptography.Xml.SignedXml]::new($signedXml)
+    $verifier.LoadXml($signedXml.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#')[0])
+    if(-not $verifier.CheckSignature($cert,$true)){throw 'Assinatura local invalida.'}
+    if($signedXml.GetElementsByTagName('X509Certificate','http://www.w3.org/2000/09/xmldsig#').Count -ne 1){throw 'Certificado publico ausente.'}
+    $signedXml.GetElementsByTagName('vServ','http://www.sped.fazenda.gov.br/nfse')[0].InnerText='999.99'
+    $tampered=[Security.Cryptography.Xml.SignedXml]::new($signedXml)
+    $tampered.LoadXml($signedXml.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#')[0])
+    if($tampered.CheckSignature($cert,$true)){throw 'Alteracao de valor nao detectada.'}
+    foreach($cnpj in @('00000000000000','11222333000182')){
+        $blocked=$false;try{$null=Sign-TriadeOfflineDps -Bytes $unsigned -Certificate $cert -SchemaDirectory $schemaDirectory -OwnCnpj $cnpj}catch{$blocked=$true}
+        if(-not $blocked){throw 'Divergencia de emitente nao bloqueada.'}
+    }
+    foreach($text in @(([Text.Encoding]::UTF8.GetString($unsigned)).Replace('<tpAmb>2</tpAmb>','<tpAmb>1</tpAmb>'), '<!DOCTYPE DPS [<!ENTITY bad SYSTEM "file:///secret">]><DPS>&bad;</DPS>')){
+        $blocked=$false;try{$null=Read-TriadeDps -Bytes ([Text.Encoding]::UTF8.GetBytes($text)) -SchemaDirectory $schemaDirectory}catch{$blocked=$true}
+        if(-not $blocked){throw 'XML de producao ou DTD nao bloqueado.'}
+    }
+    $blocked=$false;try{$null=Sign-TriadeOfflineDps -Bytes $signedBytes -Certificate $cert -SchemaDirectory $schemaDirectory -OwnCnpj '11222333000181'}catch{$blocked=$true}
+    if(-not $blocked){throw 'Segunda assinatura nao bloqueada.'}
     & (Join-Path $root 'ConectorTriade.ps1') -SelfTest
+    Write-Output 'PASS: XSD restrito, XMLDSIG, integridade, bloqueio de CNPJ divergente, producao, DTD e segunda assinatura. Sem rede.'
     Write-Output 'PASS: parser Windows PowerShell, validade, chave privada, importacao efemera, senha incorreta e handler sem redirects. Sem rede ou certificados reais.'
 } finally {
     foreach($object in @($handler,$imported,$public,$expired,$cert,$key,$password)) { if ($null -ne $object) { $object.Dispose() } }

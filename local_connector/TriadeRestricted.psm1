@@ -106,6 +106,14 @@ function Get-TriadeFiscalErrorCodes {
  }
  return ($codes -join ', ')
 }
+function Test-TriadeResponseId {
+ # The Swagger describes idDps as the DPS identifier, but the restricted API answered the first authorization (2026-11-05)
+ # with idDps = "NFS" + access key, i.e. the NFS-e Id. Accept exactly those two forms; the binding to OUR DPS is enforced
+ # afterwards by Save-TriadeReturnedNfse, which requires the returned XML to contain this DPS Id, CNPJ, competence and amount.
+ param($Value,[string]$Identifier,$Key)
+ if([string]$Key -notmatch '^[0-9]{50}$'){return $false}
+ return ([string]$Value -ceq $Identifier) -or ([string]$Value -ceq ('NFS'+[string]$Key))
+}
 function Save-TriadeReturnedNfse {
  param($Body,[string]$Identifier,[string]$Key,[string]$Directory,[string]$SchemaDirectory,$Review)
  if($Body.tipoAmbiente -ne 2 -or $Key -notmatch '^[0-9]{50}$' -or $Body.chaveAcesso -ne $Key){throw 'RESPONSE_ID'}
@@ -246,7 +254,7 @@ function Invoke-TriadeSingleRestrictedDps {
    if($lookup.status -ne 200){throw 'NFSE_RECOVERY_PENDING'}
    $phase='VALIDAR_CONSULTA'
    $found=Read-TriadeFiscalJson -Response $lookup
-   if($found.idDps -ne $review.identifier -or $found.chaveAcesso -notmatch '^[0-9]{50}$'){throw 'RESPONSE_ID'}
+   if(-not (Test-TriadeResponseId -Value $found.idDps -Identifier $review.identifier -Key $found.chaveAcesso)){throw 'RESPONSE_ID'}
    $state.status='Localizada; documento pendente';$state.attempted=$true;$state.access_key=$found.chaveAcesso
    Save-TriadeRestrictedState -Path $statePath -State $state
    $phase='CONSULTAR_NFSE'
@@ -278,7 +286,7 @@ function Invoke-TriadeSingleRestrictedDps {
   $phase='VALIDAR_RESPOSTA'
   if($response.status -eq 201){
    $body=Read-TriadeFiscalJson -Response $response
-   if($body.idDps -ne $review.identifier){throw 'RESPONSE_ID'}
+   if(-not (Test-TriadeResponseId -Value $body.idDps -Identifier $review.identifier -Key $body.chaveAcesso)){throw 'RESPONSE_ID'}
    $state.nfse_sha256=Save-TriadeReturnedNfse -Body $body -Identifier $review.identifier -Key $body.chaveAcesso -Directory $directory -SchemaDirectory $SchemaDirectory -Review $review
    $state.access_key=$body.chaveAcesso;$state.status='Autorizada em teste';Save-TriadeRestrictedState -Path $statePath -State $state
    return Get-TriadeRestrictedResult -State $state -Message 'API autorizou a NFS-e em produção restrita. XML original e resposta preservados no PC.' -HttpStatus 201

@@ -12,7 +12,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeRestricted.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.8.4'
+$form.Text = 'Tríade NFS-e | Conector local 0.8.5'
 $form.ClientSize = [Drawing.Size]::new(720,705)
 $form.MinimumSize = [Drawing.Size]::new(736,744)
 $form.StartPosition = 'CenterScreen'
@@ -76,7 +76,7 @@ function Invoke-TriadeDpsAction([bool]$Send) {
     $result=Invoke-TriadeSingleRestrictedDps -Bytes $bytes -Certificate $script:selectedCertificate -SchemaDirectory $schema -JournalRoot $journal -Client $client -ConfirmRestrictedSend -ConfirmTimezoneRevision:($kind -eq 'timezone') -ConfirmImRevision:($kind -eq 'im')
    }
   }
-  $lines=@('Tríade NFS-e | teste unitário 0.8.4','Ambiente: produção restrita.',('Situação: '+$result.state),$result.message)
+  $lines=@('Tríade NFS-e | teste unitário 0.8.5','Ambiente: produção restrita.',('Situação: '+$result.state),$result.message)
   if($result.http_status -gt 0){$lines+=('HTTP '+$result.http_status)}
   $diagnostic=$result.PSObject.Properties['diagnostic']
   if($null -ne $diagnostic){
@@ -131,7 +131,7 @@ $signDps.Add_Click({
         # CreateNew protects the original XML and any existing file.
         $file=[IO.File]::Open($save.FileName,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
         try{$file.Write($signedBytes,0,$signedBytes.Length)}finally{$file.Dispose()}
-        $script:lastSummary=@('Tríade NFS-e | preparação local 0.8.4','XML de produção restrita validado no XSD recebido.','Assinatura criada e integridade criptográfica conferida localmente.','CNPJ do prestador confere com o OID CNPJ do certificado.','Não foram validados cadeia ICP-Brasil, revogação, credenciamento ou aceitação da assinatura na API.','Arquivo salvo somente no PC. Nenhuma DPS enviada. Produção continua bloqueada.') -join [Environment]::NewLine
+        $script:lastSummary=@('Tríade NFS-e | preparação local 0.8.5','XML de produção restrita validado no XSD recebido.','Assinatura criada e integridade criptográfica conferida localmente.','CNPJ do prestador confere com o OID CNPJ do certificado.','Não foram validados cadeia ICP-Brasil, revogação, credenciamento ou aceitação da assinatura na API.','Arquivo salvo somente no PC. Nenhuma DPS enviada. Produção continua bloqueada.') -join [Environment]::NewLine
         $output.Text=$script:lastSummary;$copy.Enabled=$true
     } catch {
         $code='OFFLINE_PREPARATION_FAILED'
@@ -193,7 +193,7 @@ $run.Add_Click({
             $temporary=Import-TriadeLocalA1 -Path $fileBox.Text -Password $secure;$active=$temporary
         }
         $check=Get-TriadeCertificateCheck -Certificate $active
-        $lines=@('Tríade NFS-e | diagnóstico local 0.8.4',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
+        $lines=@('Tríade NFS-e | diagnóstico local 0.8.5',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
         if ($null -ne $temporary) { $lines+='Origem: arquivo A1 temporário (chave efêmera).' } else { $lines+='Origem: certificado instalado no Windows.' }
         $lines+=('PowerShell: '+$PSVersionTable.PSVersion.ToString()+' | .NET: '+[Environment]::Version.ToString())
         if ($network.Checked) {
@@ -217,7 +217,7 @@ $apiProbe.Add_Click({
     $apiProbe.Enabled=$false;$saveApi.Enabled=$false;$run.Enabled=$false;$windowsButton.Enabled=$false;$fileButton.Enabled=$false;$form.UseWaitCursor=$true;$output.Text='Consultando rota de diagnóstico...';$form.Refresh()
     try {
         $probe=Invoke-TriadeRestrictedApiProbe -Certificate $script:selectedCertificate
-        $lines=@('Tríade NFS-e | teste API somente de leitura 0.8.4','Ambiente: produção restrita. Origem: certificado instalado no Windows.','Método: HEAD /dps/diagnostico-local (identificador intencionalmente inválido).')
+        $lines=@('Tríade NFS-e | teste API somente de leitura 0.8.5','Ambiente: produção restrita. Origem: certificado instalado no Windows.','Método: HEAD /dps/diagnostico-local (identificador intencionalmente inválido).')
         if ($null -ne $probe.http_status) { $lines+=('HTTP '+$probe.http_status) };$lines+=$probe.message
         if ($null -ne $probe.failure) { $lines+=('Categoria: '+$probe.failure.category+' | Códigos: '+$probe.failure.codes);$lines+=('Tipos: '+$probe.failure.types) }
         $lines+='Nenhuma DPS enviada. Produção continua bloqueada.'

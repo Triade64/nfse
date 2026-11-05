@@ -66,3 +66,19 @@ Mensagem da API fornecida pelo operador: IM do prestador não deve ser informada
 Gerador exige escolha explícita de inclusão/omissão da IM. Conector verifica assinatura e gera nova cópia removendo somente prest/IM, com o mesmo horário, IdDPS e demais campos. Envio da revisão exige rejeição E0120 isolada, ambiente 2, confirmação específica, comparação canônica de todos os campos restantes e HEAD 404. Revisões anteriores são encaminhadas por seus registros de hashes antes de comparar a nova cópia, suportando E0008 -> E0120 sem afrouxar a verificação de campos.
 
 Registros correcao-im.json/ajuste-im são separados dos originais, sem reset de attempted, remoção de arquivos ou atualização de dados reais no banco. A configuração de uma empresa não é inferida para outras. Testes cobrem omissão no gerador sem mutação cadastral, assinatura nova, confirmação, cadeia E0008/E0120, preservação byte a byte dos históricos, alterações indevidas, DPS existente e timeout sem reenvio.
+
+
+## Atualização 0.8.5: reconhecimento da autorização real
+
+Em 05/11/2026, a DPS série 1 nº 3 (reservada pelo site 0.7.1) recebeu **HTTP 201**. A NFS-e devolvida, conferida no XML, é a nº 1, com cStat 100, tpAmb 2 e chave `42057042204873094000164000000000000126116525669388`. Ela contém exatamente a DPS enviada.
+
+A resposta trouxe `idDps` = `"NFS" + chaveAcesso`, ou seja, o Id da NFS-e, e não o Id da DPS que o Swagger descreve. A 0.8.4 comparava `idDps` com o Id da DPS e registrou `RESPONSE_ID` / "Situação desconhecida; consultar", sem gravar a chave.
+
+A 0.8.5 aceita `idDps` igual ao Id da DPS **ou** exatamente `NFS` + a chave de 50 dígitos da mesma resposta, tanto no POST quanto no GET `/dps/{id}`. Qualquer outro valor continua bloqueado, inclusive outra chave ou caixa diferente. O vínculo com a DPS enviada continua sendo exigido em `Save-TriadeReturnedNfse`: XSD da NFS-e, Id `NFS`+chave, Id da DPS, ambiente 2, CNPJ, competência e valor.
+
+Testes:
+- CI sintético com o formato real, no envio e na consulta.
+- Negativos sem reenvio: outra chave, valor arbitrário e caixa diferente.
+- Replay offline da resposta real em uma cópia temporária: aceita, XML validado e vinculado à DPS nº 3. O histórico real não foi alterado.
+
+Recuperação no PC: atualizar o conector e usar somente **Consultar resultado** com o mesmo XML assinado.

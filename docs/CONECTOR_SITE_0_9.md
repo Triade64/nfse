@@ -144,3 +144,13 @@ O DANFSe gerado pelo site passa a reproduzir o **DANFSe v2.0 do Portal Nacional*
 - **Comparação:** a mesma NFS-e nº 5 gerada pelo site ficou visualmente igual ao PDF oficial. O QR gerado decodifica para a mesma URL do QR oficial.
 - **Testes:** backend com 88 de 88 aprovados, incluindo o teste do QR (`pymupdf` e `opencv-python-headless` só em `requirements-dev.txt`).
 - **Dependências do site:** `fpdf2==2.8.3` e `segno==1.6.6` (Python puro).
+
+## Atualização 0.9.4: nomes de municípios e países no DANFSe
+
+- **Tabela oficial:** `backend/app/data/localidades.json`, gerada do Anexo A (`docs/official/anexo_a-municipio_ibge-paises_iso2-v1-00-snnfse-20251210.xlsx`) por `scripts/build_localidades.py`. Tem 5.570 municípios IBGE com nome e UF, 250 países ISO2 e a localidade especial `0000000` (Águas Marítimas).
+- **Correção do Anexo A:** a planilha oficial deixa a coluna "Sigla UF" vazia a partir do Maranhão (5.120 linhas). O script deriva a UF do prefixo de 2 dígitos do código IBGE e confere com a sigla nas linhas em que ela existe. Uma divergência interrompe a geração; nenhuma foi encontrada.
+- **DANFSe:**
+  - "Município / Sigla UF" do prestador e do tomador mostra o nome e a UF pela tabela, também para outras cidades;
+  - "Local da Prestação / Sigla UF / País" e "Município / Sigla UF / País de Incidência do ISSQN" seguem o formato oficial `Cidade / UF / -`; no exterior aparece `- / - / País`;
+  - código desconhecido continua visível como `IBGE <código>`.
+- **Testes:** backend com 90 de 90 aprovados (tomador em Florianópolis/SC, prestação em São Paulo/SP, prestação em Portugal, código desconhecido). A mesma NFS-e nº 5 continua igual ao modelo oficial.

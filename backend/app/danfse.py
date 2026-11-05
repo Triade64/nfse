@@ -8,12 +8,15 @@ is invented; missing information is printed as "-" exactly like the official doc
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+import json
+from functools import lru_cache
 import segno
 from fpdf import FPDF
 from lxml import etree
 
 NS = {'n': 'http://www.sped.fazenda.gov.br/nfse'}
 LOGO = Path(__file__).resolve().parent / 'data' / 'nfse-logo.png'
+LOCALIDADES = Path(__file__).resolve().parent / 'data' / 'localidades.json'
 CONSULTA = {'1': 'https://www.nfse.gov.br/ConsultaPublica?tpc=1&chave=', '2': 'https://www.producaorestrita.nfse.gov.br/ConsultaPublica?tpc=1&chave='}
 # Descriptions as in the official XSD (tiposSimples_v1.01).
 OP_SIMP = {'1': 'Não Optante', '2': 'Optante - Microempreendedor Individual (MEI)', '3': 'Optante - Microempresa ou Empresa de Pequeno Porte (ME/EPP)'}
@@ -83,6 +86,30 @@ def _nbs(code) -> str:
     return f'{code[0]}.{code[1:5]}.{code[5:7]}.{code[7:]}' if len(code or '') == 9 else (code or '-')
 
 
+@lru_cache(maxsize=1)
+def _localidades() -> dict:
+    """Official Anexo A (IBGE municipalities with UF, ISO2 countries), built by scripts/build_localidades.py."""
+    try:
+        return json.loads(LOCALIDADES.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {'municipios': {}, 'paises': {}, 'especiais': {}}
+
+
+def municipio(code: str) -> tuple[str, str]:
+    """(name, UF) for an IBGE code; special localities have no UF; unknown codes return ('IBGE <code>', '-')."""
+    data = _localidades()
+    if code in data['municipios']:
+        name, uf = data['municipios'][code]
+        return name, uf
+    if code in data['especiais']:
+        return data['especiais'][code], '-'
+    return (f'IBGE {code}', '-') if code else ('-', '-')
+
+
+def pais(iso: str) -> str:
+    return _localidades()['paises'].get((iso or '').upper(), iso or '-') if iso else '-'
+
+
 class _Doc:
     def __init__(self, xml: str):
         parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
@@ -116,13 +143,19 @@ def build_danfse(nfse_xml: str) -> bytes:
     tot = vals.find('n:trib/n:totTrib', NS) if vals is not None else None
     v_nfse = inf.find('n:valores', NS)
 
-    def city(code, name_hint=''):
-        # Names come from the NFS-e itself; for another municipality without a name in the XML, show the IBGE code.
-        if name_hint:
-            return name_hint
-        if code and code == c_loc_emi:
-            return f"{t(inf, 'n:xLocEmi')} / {uf}" if uf else t(inf, 'n:xLocEmi')
-        return f'IBGE {code}' if code else '-'
+    def city(code):
+        # Name and UF from the official IBGE table (Anexo A); "Nome / UF" exactly as in the official DANFSe.
+        if not code:
+            return '-'
+        name, sigla = municipio(code)
+        return f'{name} / {sigla}' if sigla != '-' else name
+
+    def place(code, country=''):
+        # "Município / Sigla UF / País": Brazilian location has no country; abroad only the country is shown.
+        if code:
+            name, sigla = municipio(code)
+            return f'{name} / {sigla} / -'
+        return f'- / - / {pais(country)}' if country else '- / - / -'
 
     pdf = FPDF(unit='pt', format=(595, 842))
     pdf.set_auto_page_break(False)
@@ -178,7 +211,8 @@ def build_danfse(nfse_xml: str) -> bytes:
         pdf.set_text_color(*color)
         s = _latin1(value)
         pdf.text(297.6 - pdf.get_string_width(s) / 2, base, s)
-    text(445.6, 18.7, f"Município: {t(inf, 'n:xLocEmi')}" + (f' - {uf}' if uf else ''), size=8)
+    emi_name, emi_uf = municipio(c_loc_emi)
+    text(445.6, 18.7, f"Município: {t(inf, 'n:xLocEmi') or emi_name}" + (f' - {emi_uf}' if emi_uf != '-' else (f' - {uf}' if uf else '')), size=8)
     text(445.6, 25.9, f"Ambiente Gerador: {t(inf, 'n:ambGer') or '-'}", size=6)
     text(445.6, 32.7, f'Tipo de Ambiente: {tp_amb or "-"}', size=6)
 
@@ -259,10 +293,9 @@ def build_danfse(nfse_xml: str) -> bytes:
     gray(LEFT, line_y + 0.2, 153.1, line_y + 19.4)
     text(COL[0], line_y + 6.8, 'SERVIÇO PRESTADO', size=7, bold=True)
     c_loc_prest = t(serv, 'n:locPrest/n:cLocPrestacao')
-    loc_prest = t(inf, 'n:xLocPrestacao') or (f'IBGE {c_loc_prest}' if c_loc_prest else '-')
     field(1, line_y, 'Código de Tributação Nacional/Municipal', f"{_ctrib(t(serv, 'n:cServ/n:cTribNac'))} / {t(serv, 'n:cServ/n:cTribMun') or '-'}")
     field(2, line_y, 'Código da NBS', _nbs(t(serv, 'n:cServ/n:cNBS')))
-    field(3, line_y, 'Local da Prestação / Sigla UF / País', f"{loc_prest} / {uf if c_loc_prest == t(emit_end, 'n:cMun') and uf else '-'} / {t(serv, 'n:locPrest/n:cPaisPrestacao') or '-'}")
+    field(3, line_y, 'Local da Prestação / Sigla UF / País', place(c_loc_prest, t(serv, 'n:locPrest/n:cPaisPrestacao')))
     text(COL[0], line_y + 25.8, t(inf, 'n:xTribNac'), width=RIGHT - COL[0] - 3)
     text(COL[0], line_y + 37.2, 'Descrição do Serviço', size=6, bold=True)
     pdf.set_font('Helvetica', '', 7)
@@ -279,7 +312,7 @@ def build_danfse(nfse_xml: str) -> bytes:
     c_incid = t(inf, 'n:cLocIncid')
     field(1, base, 'Tipo de Tributação do ISSQN', TRIB_ISSQN.get(t(trib_mun, 'n:tribISSQN'), '-'))
     field(2, base, 'Município / Sigla UF / País de Incidência do ISSQN',
-          f"{t(inf, 'n:xLocIncid') or '-'} / {uf if c_incid and c_incid == t(emit_end, 'n:cMun') and uf else '-'} / -", span=2)
+          place(c_incid) if c_incid else '- / - / -', span=2)
     for col, label, value in [(0, 'BC ISSQN', _money(t(v_nfse, 'n:vBC')) if t(v_nfse, 'n:vBC') else '-'),
                               (1, 'Alíquota Aplicada', _pct(t(v_nfse, 'n:pAliqAplic'))),
                               (2, 'Retenção do ISSQN', RET_ISSQN.get(t(trib_mun, 'n:tpRetISSQN'), '-')),

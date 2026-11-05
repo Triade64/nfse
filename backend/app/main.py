@@ -27,6 +27,7 @@ from .db import Base, engine, Session, ROOT, DATA, URL
 from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access, DPS, DpsSeries, DISCARDED, now
 from .security import current_user, db_session, hasher, role, allowed_company, company_ids, issue_session
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
+from .tomador import normalize_address, complete_address, address_required
 from .dps_preview import PreviewOptions, ReserveOptions, FiscalProfile, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, SERIES_PATTERN, BRASILIA
 from argon2.exceptions import VerificationError, InvalidHashError
 from openpyxl import Workbook, load_workbook
@@ -140,7 +141,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.7.2',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.8.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -194,7 +195,7 @@ def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Dep
     if d.raw!=data.expected_raw:raise HTTPException(409,'Rascunho alterado. Recarregue a tela antes de gerar a prévia.')
     if not d.company_id:raise HTTPException(422,'Rascunho sem emitente cadastrado.')
     c=get_or_404(db,Company,d.company_id);allowed_company(db,u,c.id)
-    try:xml=build_preview(d.raw,serialize(c),data)
+    try:xml=build_preview(d.raw,serialize(c),data,tomador_address(db,c.id,d.raw.get('documento_tomador')))
     except ValueError as exc:raise HTTPException(422,str(exc)) from None
     digest=hashlib.sha256(xml).hexdigest()
     audit(db,u,'offline_dps_preview','draft',d.id,{'xml_sha256':digest,'environment':2,'batch_revision':b.revision,'number_reserved':False})
@@ -266,7 +267,7 @@ def reserve_core(db,u,d,b,data):
     if not s:raise HTTPException(409,'Série sem numeração configurada para esta empresa. Configure o próximo número antes de reservar.')
     number=str(s.next_number)
     issued_at=datetime.now(timezone.utc).replace(microsecond=0)-timedelta(minutes=1)
-    try:xml=build_dps(d.raw,serialize(c),data,data.own_company_cnpj,series,number,issued_at,'Triade-Web-0.6')
+    try:xml=build_dps(d.raw,serialize(c),data,data.own_company_cnpj,series,number,issued_at,'Triade-Web-0.8',tomador_address(db,c.id,d.raw.get('documento_tomador')))
     except ValueError as exc:raise HTTPException(422,str(exc)) from None
     digest=hashlib.sha256(xml).hexdigest()
     municipality=str(c.config.get('municipio_ibge',''))
@@ -324,9 +325,16 @@ def note_situation(d,dps):
     if d.fingerprint:return 'Pronta'
     return 'Rascunho'
 
-def note_public(d,b,dps):
+def note_public(d,b,dps,address_missing=False):
     return {'id':d.id,'batch_id':d.batch_id,'batch_revision':b.revision,'company_id':d.company_id,'raw':d.raw,'errors':d.errors,'amount_cents':d.amount_cents,
-            'situation':note_situation(d,dps),'dps':dps_public(dps) if dps is not None else None,'editable':dps is None and b.status not in LOCKED}
+            'situation':note_situation(d,dps),'dps':dps_public(dps) if dps is not None else None,'editable':dps is None and b.status not in LOCKED,
+            'address_missing':address_missing}
+
+def tomador_address(db,company_id,document):
+    """Complete structured address of this company's registered customer, or None. Never inferred from free text."""
+    if not company_id:return None
+    cust=db.scalar(select(Customer).where(Customer.company_id==company_id,Customer.document==digits(document)))
+    return complete_address(cust.details) if cust else None
 
 @app.get('/api/notes')
 def list_notes(u=Depends(current_user),db=Depends(db_session)):
@@ -336,7 +344,12 @@ def list_notes(u=Depends(current_user),db=Depends(db_session)):
     if ids is not None:query=query.where(Draft.company_id.in_(ids))
     rows=list(db.execute(query))
     active={x.draft_id:x for x in db.scalars(select(DPS).where(DPS.draft_id.in_([d.id for d,_ in rows]),active_dps()))} if rows else {}
-    return [note_public(d,b,active.get(d.id)) for d,b in rows]
+    company_set={d.company_id for d,_ in rows if d.company_id}
+    addresses={(x.company_id,x.document):complete_address(x.details) for x in db.scalars(select(Customer).where(Customer.company_id.in_(company_set)))} if company_set else {}
+    def missing(d):
+        doc=digits(d.raw.get('documento_tomador'))
+        return address_required(doc) and addresses.get((d.company_id,doc)) is None
+    return [note_public(d,b,active.get(d.id),missing(d)) for d,b in rows]
 
 class DuplicateInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -523,7 +536,11 @@ def save_customer(data,db,u,c=None):
     if not valid_document(data.document):raise HTTPException(422,'CPF/CNPJ inválido ou não suportado')
     if c and c.company_id!=data.company_id:raise HTTPException(422,'Não transfira cadastros entre empresas')
     if not c:c=Customer(company_id=data.company_id);db.add(c)
-    c.document=digits(data.document);c.name=data.name;c.details=data.details
+    details=dict(data.details or {})
+    address,problems=normalize_address(details)
+    if problems:raise HTTPException(422,' '.join(problems))
+    if address:details.update(address)
+    c.document=digits(data.document);c.name=data.name;c.details=details
     db.flush();audit(db,u,'save','customer',c.id);db.commit();return serialize(c)
 @app.post('/api/customers')
 def create_customer(data:CustomerInput,u=Depends(current_user),db=Depends(db_session)):return save_customer(data,db,u)

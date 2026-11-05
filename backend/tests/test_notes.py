@@ -106,3 +106,43 @@ def test_non_simples_profile_refuses_percent(admin,company,row):
     r=emit(admin,n,simples_percent=None);assert r.status_code==200,r.text
     xml=etree.fromstring(admin.get(f'/api/dps/{r.json()["id"]}/xml').content)
     assert xml.find('.//{*}indTotTrib').text=='0'
+
+ADDRESS={'cep':'88010-001','logradouro':'Rua Fictícia de Testes','numero':'100','complemento':'Sala 2','bairro':'Centro','municipio_ibge':'4205704'}
+PJ='11222333000181'  # fictitious valid CNPJ used as customer
+
+def customer(admin,company,document,details):
+    return admin.post('/api/customers',json={'company_id':company['id'],'document':document,'name':'CLIENTE PJ FICTICIO','details':details})
+
+def test_customer_address_is_validated_and_normalized(admin,company):
+    assert customer(admin,company,PJ,{**ADDRESS,'cep':'123'}).status_code==422
+    r=customer(admin,company,PJ,{**ADDRESS,'numero':''});assert r.status_code==422 and 'Número' in r.json()['detail']
+    r=customer(admin,company,PJ,ADDRESS);assert r.status_code==200
+    assert r.json()['details']['cep']=='88010001'
+    assert customer(admin,company,'52998224725',{'email':'x@exemplo.com'}).status_code==200  # no address at all is allowed
+
+def test_pj_customer_without_address_blocks_emission_e0235_without_consuming_number(admin,company,row):
+    set_profile(admin,company)
+    admin.put(f'/api/companies/{company["id"]}/dps-series',json={'series':'1','next_number':5,'expected_revision':None,'confirm_unused':True})
+    n=note(admin,{**row,'documento_tomador':PJ,'nome_tomador':'CLIENTE PJ FICTICIO'})
+    assert n['address_missing'] is True
+    r=emit(admin,n);assert r.status_code==422 and 'E0235' in r.json()['detail']
+    customer(admin,company,PJ,ADDRESS)
+    n=next(x for x in notes(admin) if x['id']==n['id']);assert n['address_missing'] is False
+    r=emit(admin,n);assert r.status_code==200,r.text
+    assert r.json()['number']==5  # the refused attempt did not consume a number
+    xml=etree.fromstring(admin.get(f'/api/dps/{r.json()["id"]}/xml').content)
+    end=xml.find('.//{*}toma/{*}end')
+    assert end.find('{*}endNac/{*}cMun').text=='4205704' and end.find('{*}endNac/{*}CEP').text=='88010001'
+    assert [c.tag.split('}')[1] for c in end]==['endNac','xLgr','nro','xCpl','xBairro']
+    assert end.find('{*}xLgr').text=='Rua Fictícia de Testes'
+    from app.dps_preview import SCHEMA_DIR
+    etree.XMLSchema(etree.parse(str(SCHEMA_DIR/'DPS_v1.01.xsd'))).assertValid(xml)
+
+def test_cpf_customer_address_is_optional_but_sent_when_complete(admin,company,row):
+    set_profile(admin,company)
+    admin.put(f'/api/companies/{company["id"]}/dps-series',json={'series':'1','next_number':1,'expected_revision':None,'confirm_unused':True})
+    n=note(admin,row);assert n['address_missing'] is False
+    customer(admin,company,row['documento_tomador'],{**ADDRESS,'complemento':''})
+    r=emit(admin,n);assert r.status_code==200,r.text
+    end=etree.fromstring(admin.get(f'/api/dps/{r.json()["id"]}/xml').content).find('.//{*}toma/{*}end')
+    assert end is not None and end.find('{*}xCpl') is None

@@ -3,7 +3,7 @@ import {Copy, Plus, Pencil, Send, Download, Trash2, Search, RefreshCw, X} from '
 
 type Data=Record<string,any>;
 type Api=(path:string,method?:string,data?:any)=>Promise<any>;
-export type Note={id:number;batch_id:number;batch_revision:number;company_id:number|null;raw:Record<string,string>;errors:string[];amount_cents:number;situation:string;dps:Data|null;editable:boolean};
+export type Note={id:number;batch_id:number;batch_revision:number;company_id:number|null;raw:Record<string,string>;errors:string[];amount_cents:number;situation:string;dps:Data|null;editable:boolean;address_missing?:boolean};
 
 const money=(c:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((c||0)/100);
 const dateBR=(iso:string)=>iso?iso.split('-').reverse().join('/'):'—';
@@ -63,11 +63,11 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
    <td><input type="checkbox" aria-label={'Selecionar '+n.raw.nome_tomador} checked={checked.includes(n.id)} onChange={e=>setChecked(prev=>e.target.checked?[...prev,n.id]:prev.filter(id=>id!==n.id))}/></td>
    <td><strong>{n.raw.nome_tomador||'Tomador não informado'}</strong><small>{n.raw.descricao_servico}</small></td>
    <td>{companyOf(n.company_id)?.name||n.raw.cnpj_emitente}</td><td>{dateBR(n.raw.competencia)}</td><td>{money(n.amount_cents)}</td>
-   <td><span className={'badge '+tone(n.situation)}>{n.situation}</span>{n.dps&&<small>Série {n.dps.series} · nº {n.dps.number}</small>}{n.errors.map(s=><small className="rowError" key={s}>{s}</small>)}</td>
+   <td><span className={'badge '+tone(n.situation)}>{n.situation}</span>{n.dps&&<small>Série {n.dps.series} · nº {n.dps.number}</small>}{n.errors.map(s=><small className="rowError" key={s}>{s}</small>)}{n.address_missing&&!n.dps&&<small className="rowError">Tomador com CNPJ sem endereço completo (E0235). Complete em Tomadores antes de emitir.</small>}</td>
    <td><div className="entryActions">
     {canEdit&&n.editable&&<button className="textBtn" onClick={()=>{setEditing({note:n,raw:{...blank(),...n.raw}});setNotice('')}}><Pencil size={15}/> Editar</button>}
     {canEdit&&<button className="textBtn" onClick={()=>openDuplicate([n])}><Copy size={15}/> Duplicar</button>}
-    {isAdmin&&n.situation==='Pronta'&&<button className="textBtn" onClick={()=>openEmit(n)}><Send size={15}/> Emitir</button>}
+    {isAdmin&&n.situation==='Pronta'&&!n.address_missing&&<button className="textBtn" onClick={()=>openEmit(n)}><Send size={15}/> Emitir</button>}
     {n.dps&&<a className="textBtn" href={'/api/dps/'+n.dps.id+'/xml'} download={n.dps.identifier+'.xml'}><Download size={15}/> XML</a>}
     {isAdmin&&n.dps?.status==='Reservada'&&<button className="textBtn" onClick={()=>{setDiscarding(n);setReason('');setDiscardOk(false);setNotice('')}}><Trash2 size={15}/> Descartar</button>}
    </div></td></tr>)}</tbody></table></div>

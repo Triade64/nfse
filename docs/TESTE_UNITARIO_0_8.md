@@ -44,3 +44,16 @@ A atualização não muda contrato fiscal, regras de reenvio, destino ou formato
 ## Atualização 0.8.2 — existência por HEAD
 
 Operador confirmou tipoAmbiente System.Int32=0 na resposta HTTP 404 de GET. Não é aceito como ambiente de homologação. A consulta prévia passa a HEAD /dps/{id}, cujo contrato documenta 200/400/404 sem JSON. HEAD 404 e ausência de tentativa anterior permitem POST somente com confirmação explícita; HEAD 200 leva a GET para recuperar chave/documento sem POST. GET de sucesso e resposta de autorização mantêm validação estrita de ambiente=2. Destino, journal e bloqueio de reenvio permanecem os mesmos. Teste inicial solicitado ao operador: somente consulta.
+
+
+## Atualização 0.8.3 — fuso explícito e revisão controlada
+
+Caso informado pelo operador: dhEmi 2026-11-05T13:03:00+00:00, processamento 2026-11-05T10:56:16.5796177-03:00, E0008. Normalizando os fusos, a emissão era 10:03-03:00, anterior ao processamento. Portanto os horários não demonstram emissão futura. A hipótese de interpretação do fuso pelo servidor permanece pendente de teste.
+
+Frontend usa entrada explícita Brasília, independente do fuso do navegador; backend normaliza ao offset -03:00 e recusa instante futuro. O conector pode verificar assinatura existente, normalizar apenas dhEmi ao mesmo instante e assinar um novo arquivo. Competência, numeração e todos os campos fiscais são mantidos.
+
+Uma revisão de envio exige: original com hash íntegro e assinatura correspondente ao certificado; status Rejeitada em teste; resposta ambiente 2 com exclusivamente E0008; novo XML com assinatura válida; mesmo IdDPS e instante UTC; conteúdo XML canônico idêntico depois de normalizar dhEmi e remover as assinaturas; confirmação específica do operador; HEAD 404 antes do registro. A verificação de conteúdo inclui todos os demais elementos, valores e atributos.
+
+Original estado.json, dps-assinada.xml e resposta-envio.json permanecem intactos. Registro correcao-fuso.json vincula somente um hash revisado; tentativa revisada usa journal separado sob ajuste-fuso/IdDPS. Nunca se zera attempted da tentativa anterior. O journal da revisão mantém todas as proteções contra reenvio e resultado desconhecido. Após registro, consultas do XML revisado são roteadas ao journal revisado.
+
+CI usa retorno de rejeição e transporte fictícios; cobre equivalência do instante, consentimento específico, preservação byte a byte do histórico original, recuperação/limite de tentativa, campos fiscais alterados, outro código de erro, HEAD encontrando documento e timeout da revisão. Nenhum teste fiscal real foi executado pelo agente.

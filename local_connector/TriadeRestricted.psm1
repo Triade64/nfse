@@ -131,7 +131,7 @@ function Get-TriadeRestrictedFailureInfo {
  param([Exception]$Exception,[int]$LastHttp)
  $failure=Get-TriadeConnectionFailure -Exception $Exception
  $reason='UNCLASSIFIED';$cursor=$Exception
- $allowed=@('JOURNAL_INVALID','JOURNAL_CONFLICT','RESPONSE_FORMAT','RESPONSE_ENVIRONMENT','RESPONSE_ID','HTTP_SIZE','XML_SIZE','ENVELOPE_SIZE','NFSE_RECOVERY_PENDING','FILE_EXISTS')
+ $allowed=@('TIMEZONE_REVISION_INVALID','TIMEZONE_REVISION_BLOCKED','JOURNAL_INVALID','JOURNAL_CONFLICT','RESPONSE_FORMAT','RESPONSE_ENVIRONMENT','RESPONSE_ID','HTTP_SIZE','XML_SIZE','ENVELOPE_SIZE','NFSE_RECOVERY_PENDING','FILE_EXISTS')
  for($i=0;$i -lt 8 -and $null -ne $cursor;$i++){
   if($allowed -ccontains $cursor.Message){$reason=$cursor.Message}
   if($cursor.Data.Contains('TriadeHttpStatus')){
@@ -146,7 +146,7 @@ function Get-TriadeRestrictedResult {
  return [PSCustomObject]@{state=$State.status;attempted=[bool]$State.attempted;http_status=$HttpStatus;codes=$ErrorCodes;message=$Message}
 }
 function Invoke-TriadeSingleRestrictedDps {
- param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[Parameter(Mandatory=$true)][string]$JournalRoot,[Parameter(Mandatory=$true)][Net.Http.HttpClient]$Client,[switch]$ConfirmRestrictedSend)
+ param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[Parameter(Mandatory=$true)][string]$JournalRoot,[Parameter(Mandatory=$true)][Net.Http.HttpClient]$Client,[switch]$ConfirmRestrictedSend,[switch]$ConfirmTimezoneRevision)
  $review=Test-TriadeSignedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
  $hash=Get-TriadeXmlHash -Bytes $Bytes
  $directory=Join-Path $JournalRoot $review.identifier
@@ -158,9 +158,43 @@ function Invoke-TriadeSingleRestrictedDps {
   if([IO.File]::Exists($statePath)){
    if(([IO.FileInfo]::new($statePath)).Length -gt 32768){throw 'JOURNAL_INVALID'}
    $state=[IO.File]::ReadAllText($statePath)|ConvertFrom-Json
-   if($state.version -ne 1 -or $state.environment -ne 2 -or $state.identifier -ne $review.identifier -or $state.xml_sha256 -ne $hash -or $state.attempted -isnot [bool]){throw 'JOURNAL_CONFLICT'}
+   if($state.version -ne 1 -or $state.environment -ne 2 -or $state.identifier -ne $review.identifier -or $state.attempted -isnot [bool]){throw 'JOURNAL_CONFLICT'}
    $savedXml=Join-Path $directory 'dps-assinada.xml'
-   if(-not [IO.File]::Exists($savedXml) -or ([IO.FileInfo]::new($savedXml)).Length -gt 2097152 -or (Get-TriadeXmlHash -Bytes ([IO.File]::ReadAllBytes($savedXml))) -ne $hash){throw 'JOURNAL_INVALID'}
+   if(-not [IO.File]::Exists($savedXml) -or ([IO.FileInfo]::new($savedXml)).Length -gt 2097152 -or (Get-TriadeXmlHash -Bytes ([IO.File]::ReadAllBytes($savedXml))) -ne $state.xml_sha256){throw 'JOURNAL_INVALID'}
+   if($state.xml_sha256 -ne $hash){
+    $phase='CONFERIR_REVISAO_FUSO'
+    if($state.status -ne 'Rejeitada em teste' -or -not $state.attempted){throw 'TIMEZONE_REVISION_BLOCKED'}
+    $previous=[IO.File]::ReadAllBytes($savedXml)
+    $change=Test-TriadeTimezoneOnlyRevision -Previous $previous -Revised $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+    $responsePath=Join-Path $directory 'resposta-envio.json'
+    if(-not [IO.File]::Exists($responsePath) -or ([IO.FileInfo]::new($responsePath)).Length -gt 8388608){throw 'TIMEZONE_REVISION_BLOCKED'}
+    $errorBody=Read-TriadeFiscalJson -Response ([PSCustomObject]@{text=[IO.File]::ReadAllText($responsePath)})
+    $errors=@($errorBody.erros)
+    if($errors.Count -ne 1 -or $errors[0].codigo -cne 'E0008'){throw 'TIMEZONE_REVISION_BLOCKED'}
+    $registrationPath=Join-Path $directory 'correcao-fuso.json'
+    $revisionRoot=Join-Path $directory 'ajuste-fuso'
+    if([IO.File]::Exists($registrationPath)){
+     if(([IO.FileInfo]::new($registrationPath)).Length -gt 4096){throw 'JOURNAL_INVALID'}
+     $registered=[IO.File]::ReadAllText($registrationPath)|ConvertFrom-Json
+     if($registered.previous_sha256 -ne $state.xml_sha256 -or $registered.revised_sha256 -ne $hash){throw 'TIMEZONE_REVISION_BLOCKED'}
+     return Invoke-TriadeSingleRestrictedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $revisionRoot -Client $Client -ConfirmRestrictedSend:$ConfirmRestrictedSend
+    }
+    if(-not $ConfirmRestrictedSend -or -not $ConfirmTimezoneRevision){
+     $result=Get-TriadeRestrictedResult -State $state -Message 'Revisão limitada ao fuso, mantendo o mesmo instante. A tentativa anterior será preservada; uma nova tentativa exige confirmação específica.'
+     $result|Add-Member -NotePropertyName timezone_revision -NotePropertyValue $change
+     return $result
+    }
+    # Confirm absence before recording a new immutable revision branch. No old marker is reset.
+    $phase='CONSULTAR_ANTES_DA_REVISAO'
+    $check=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation HEAD_DPS -Identifier $review.identifier)
+    $lastHttp=$check.status
+    if($check.status -ne 404 -or -not [string]::IsNullOrWhiteSpace($check.text)){
+     return Get-TriadeRestrictedResult -State $state -HttpStatus $check.status -Message 'Não foi confirmada ausência da DPS. Revisão não enviada; consulte o resultado usando o XML original.'
+    }
+    $registration=@{previous_sha256=$state.xml_sha256;revised_sha256=$hash;created_utc=[DateTime]::UtcNow.ToString('o');reason='E0008_TIMEZONE_ONLY'}|ConvertTo-Json
+    Write-TriadeDurableFile -Path $registrationPath -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($registration))
+    return Invoke-TriadeSingleRestrictedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $revisionRoot -Client $Client -ConfirmRestrictedSend
+   }
   }else{
    $state=[PSCustomObject]@{version=1;environment=2;identifier=$review.identifier;xml_sha256=$hash;attempted=$false;status='Novo';updated_utc='';access_key='';nfse_sha256=''}
    # Persist the exact signed XML before any fiscal HTTP request.

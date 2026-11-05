@@ -1,5 +1,5 @@
 """Offline restricted-environment prototype. No signing, submission or numbering reservation."""
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -33,6 +33,8 @@ class PreviewOptions(BaseModel):
     def coherent(self):
         if self.issued_at.utcoffset() is None:
             raise ValueError('Data de emissão exige fuso horário.')
+        if self.issued_at > datetime.now(timezone.utc):
+            raise ValueError('A data/hora de emissão não pode ser futura. Confira o horário de Brasília.')
         if (self.op_simp_nac == '3') != (self.reg_ap_trib_sn is not None):
             raise ValueError('Informe o regime de apuração somente para ME/EPP optante pelo SN.')
         if self.totals_mode == 'simples_percent':
@@ -61,7 +63,7 @@ def build_preview(raw: dict, company: dict, options: PreviewOptions) -> bytes:
         if text is not None: node.text = str(text)
         return node
     info = add(root,'infDPS'); info.set('Id',identifier)
-    for key,value in [('tpAmb','2'),('dhEmi',options.issued_at.isoformat(timespec='seconds')),('verAplic','Triade-Offline-0.7'),('serie',options.series),('nDPS',options.number),('dCompet',row['competencia']),('tpEmit','1'),('finNFSe','0'),('cLocEmi',municipality)]:
+    for key,value in [('tpAmb','2'),('dhEmi',options.issued_at.astimezone(timezone(timedelta(hours=-3))).isoformat(timespec='seconds')),('verAplic','Triade-Offline-0.7'),('serie',options.series),('nDPS',options.number),('dCompet',row['competencia']),('tpEmit','1'),('finNFSe','0'),('cLocEmi',municipality)]:
         add(info,key,value)
     prest=add(info,'prest'); add(prest,'CNPJ',company['cnpj'])
     # IM/address/name are conditional and must be reviewed against municipal rules.

@@ -46,3 +46,13 @@ def test_endpoint_is_offline_audited_and_stale_protected(admin,company,row):
         events=list(db.scalars(select(Audit).where(Audit.action=='offline_dps_preview')))
         assert len(events)==1 and 'xml' not in events[0].info
     admin.post('/api/logout');assert admin.post(url,json=OPTIONS).status_code==401
+
+
+def test_utc_emission_uses_same_instant_in_brasilia(row,company):
+    from datetime import datetime, timezone, timedelta
+    xml=build_preview(row,company,PreviewOptions(**{**OPTIONS,'issued_at':'2026-11-05T13:03:00+00:00'}))
+    text=etree.fromstring(xml).find('.//{*}dhEmi').text
+    assert text=='2026-11-05T10:03:00-03:00'
+    assert datetime.fromisoformat(text)==datetime.fromisoformat('2026-11-05T13:03:00+00:00')
+    with pytest.raises(ValueError,match='futura'):
+        PreviewOptions(**{**OPTIONS,'issued_at':datetime.now(timezone.utc)+timedelta(hours=1)})

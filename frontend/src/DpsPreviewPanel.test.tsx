@@ -13,7 +13,7 @@ it('requires explicit fiscal choices and reports a changed draft without downloa
  await screen.findByRole('option',{name:/#7/});expect(fetcher).toHaveBeenCalledTimes(1);
  fireEvent.change(screen.getByLabelText('Rascunho'),{target:{value:'7'}});
  for(const label of ['Situação no Simples Nacional','Regime especial municipal','Informação da alíquota de ISS','Informação dos tributos totais'])expect((screen.getByLabelText(label) as HTMLSelectElement).value).toBe('');
- const inputs:Record<string,string>={'CNPJ do próprio escritório':'11222333000181','Série de teste (não reservada)':'12','Número da DPS de teste (não reservado)':'1','Emissão — fuso deste computador':'2026-11-05T10:00','Situação no Simples Nacional':'3','Regime especial municipal':'0','Informação da alíquota de ISS':'omit','Informação dos tributos totais':'simples_percent'};
+ const inputs:Record<string,string>={'CNPJ do próprio escritório':'11222333000181','Série de teste (não reservada)':'12','Número da DPS de teste (não reservado)':'1','Emissão — horário de Brasília':'2026-11-05T10:00','Situação no Simples Nacional':'3','Regime especial municipal':'0','Informação da alíquota de ISS':'omit','Informação dos tributos totais':'simples_percent'};
  for(const [label,value] of Object.entries(inputs))fireEvent.change(screen.getByLabelText(label),{target:{value}});
  fireEvent.change(screen.getByLabelText('Regime de apuração SN'),{target:{value:'1'}});
  fireEvent.change(screen.getByLabelText('Percentual total SN'),{target:{value:'6.00'}});
@@ -21,5 +21,5 @@ it('requires explicit fiscal choices and reports a changed draft without downloa
  fireEvent.submit(button.closest('form')!);
  await waitFor(()=>expect(screen.getByRole('alert').textContent).toContain('Rascunho alterado'));
  const [url,init]=fetcher.mock.calls[2];expect(url).toBe('/api/drafts/7/restricted-preview');
- const payload=JSON.parse(init.body);expect(payload.expected_raw).toEqual(raw);expect(payload.confirm_offline).toBe(true);expect(payload.include_iss_rate).toBe(false);
+ const payload=JSON.parse(init.body);expect(payload.issued_at).toBe('2026-11-05T10:00-03:00');expect(payload.expected_raw).toEqual(raw);expect(payload.confirm_offline).toBe(true);expect(payload.include_iss_rate).toBe(false);
 });

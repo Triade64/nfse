@@ -65,3 +65,12 @@ A resposta GET de erro no PC apresentou tipoAmbiente inteiro 0. Esse valor nao e
 A consulta previa agora usa HEAD /dps/{id}, documentado para retornar 200/400/404 sem corpo. HEAD 404 permite continuar apenas se nao existir tentativa anterior e houver confirmacao explicita de envio. HEAD 200 leva a GET /dps/{id} e recuperacao da NFS-e, sem POST.
 Respostas GET de sucesso e autorizacao POST continuam exigindo ambiente 2. Nenhum destino foi alterado; producao real permanece bloqueada. Historico e XML anteriores sao preservados.
 Depois da atualizacao, use primeiro SOMENTE Consultar resultado com o mesmo XML e certificado e compartilhe o diagnostico. Nao apague o historico.
+
+
+VERSAO 0.8.3 - REPRESENTACAO DO FUSO E REVISAO LIMITADA DO E0008
+13:03+00:00 equivale a 10:03-03:00. O caso informado foi rejeitado com E0008 apesar de esse instante ser anterior ao processamento. A interpretacao do fuso pelo servidor e uma hipotese a testar, nao uma regra confirmada.
+A previa do site agora recebe horario explicitamente de Brasilia e o XML usa -03:00. O backend bloqueia data/hora futura em relacao ao seu relogio UTC.
+Para o XML ja assinado: selecione o certificado e clique Assinar / ajustar fuso. Escolha o XML original, confira os horarios original/normalizado e salve em NOVO arquivo. A assinatura antiga e conferida antes da remocao; apenas dhEmi e normalizado ao mesmo instante, sem trocar competencia, numero, valores ou enquadramento. O arquivo e assinado novamente no PC.
+Para testar a revisao, use Enviar 1 DPS de teste com o NOVO arquivo. Alem da conferencia habitual, uma confirmacao especifica exige autorizacao de UMA tentativa corrigida. O historico original deve estar Rejeitada em teste, com exatamente E0008 e ambiente 2. Qualquer alteracao fiscal ou do instante e bloqueada.
+Antes de registrar a revisao, o conector confirma HEAD 404. O registro correcao-fuso.json vincula hashes antigo/novo e permite somente essa revisao. XML, resposta e marcador da tentativa original nao sao sobrescritos ou zerados. A nova tentativa usa ajuste-fuso/<IdDPS> dentro do historico da mesma DPS, com seu proprio marcador antes do POST. Timeout ou retorno ambiguo continua impedindo reenvio.
+Se existir registro dessa revisao, Consultar resultado usando o novo XML consulta sua tentativa, sem POST. A assinatura e chave privada continuam locais. Producao real bloqueada. Nenhuma aceitacao real do ajuste de fuso e afirmada antes do retorno da API.

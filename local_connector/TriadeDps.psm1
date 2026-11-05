@@ -131,4 +131,44 @@ function Test-TriadeSignedDps {
  if(-not $verifier.CheckSignature($Certificate,$true)){throw 'SIGNATURE_CHECK_FAILED'}
  return $review
 }
-Export-ModuleMember -Function Read-TriadeDps,Get-TriadeDpsReview,Protect-TriadeOfflineDps,Test-TriadeSignedDps
+function ConvertTo-TriadeBrasiliaDps {
+ param([byte[]]$Bytes,[Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[string]$SchemaDirectory)
+ $document=Read-TriadeDps -Bytes $Bytes -SchemaDirectory $SchemaDirectory
+ $signatures=$document.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#')
+ if($signatures.Count -gt 0){
+  $null=Test-TriadeSignedDps -Bytes $Bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+  $null=$signatures[0].ParentNode.RemoveChild($signatures[0])
+ }
+ $ns=[Xml.XmlNamespaceManager]::new($document.NameTable);$ns.AddNamespace('n','http://www.sped.fazenda.gov.br/nfse')
+ $date=$document.SelectSingleNode('/n:DPS/n:infDPS/n:dhEmi',$ns)
+ $instant=[DateTimeOffset]::Parse($date.InnerText,[Globalization.CultureInfo]::InvariantCulture)
+ $date.InnerText=$instant.ToOffset([TimeSpan]::FromHours(-3)).ToString('yyyy-MM-ddTHH:mm:sszzz',[Globalization.CultureInfo]::InvariantCulture)
+ return ,([Text.UTF8Encoding]::new($false).GetBytes($document.OuterXml))
+}
+function Test-TriadeTimezoneOnlyRevision {
+ param([byte[]]$Previous,[byte[]]$Revised,[Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[string]$SchemaDirectory)
+ $old=Test-TriadeSignedDps -Bytes $Previous -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+ $new=Test-TriadeSignedDps -Bytes $Revised -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+ if($old.identifier -ne $new.identifier){throw 'TIMEZONE_REVISION_INVALID'}
+ $a=Read-TriadeDps -Bytes $Previous -SchemaDirectory $SchemaDirectory
+ $b=Read-TriadeDps -Bytes $Revised -SchemaDirectory $SchemaDirectory
+ $ns=[Xml.XmlNamespaceManager]::new($a.NameTable);$ns.AddNamespace('n','http://www.sped.fazenda.gov.br/nfse')
+ $oldNode=$a.SelectSingleNode('/n:DPS/n:infDPS/n:dhEmi',$ns)
+ $ns2=[Xml.XmlNamespaceManager]::new($b.NameTable);$ns2.AddNamespace('n','http://www.sped.fazenda.gov.br/nfse')
+ $newNode=$b.SelectSingleNode('/n:DPS/n:infDPS/n:dhEmi',$ns2)
+ $oldTime=[DateTimeOffset]::Parse($oldNode.InnerText,[Globalization.CultureInfo]::InvariantCulture)
+ $newTime=[DateTimeOffset]::Parse($newNode.InnerText,[Globalization.CultureInfo]::InvariantCulture)
+ if($oldNode.InnerText -eq $newNode.InnerText -or $newNode.InnerText -notmatch '-03:00$' -or $oldTime.UtcDateTime.Ticks -ne $newTime.UtcDateTime.Ticks){throw 'TIMEZONE_REVISION_INVALID'}
+ $before=$oldNode.InnerText;$after=$newNode.InnerText
+ $oldNode.InnerText=$newNode.InnerText
+ $canonical=@()
+ foreach($doc in @($a,$b)){
+  $sig=$doc.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#')[0];$null=$sig.ParentNode.RemoveChild($sig)
+  $transform=[Security.Cryptography.Xml.XmlDsigC14NTransform]::new();$transform.LoadInput($doc)
+  $output=$transform.GetOutput([IO.Stream]);$memory=[IO.MemoryStream]::new()
+  try{$output.CopyTo($memory);$canonical+= [Convert]::ToBase64String($memory.ToArray())}finally{$output.Dispose();$memory.Dispose()}
+ }
+ if($canonical[0] -cne $canonical[1]){throw 'TIMEZONE_REVISION_INVALID'}
+ return [PSCustomObject]@{before=$before;after=$after}
+}
+Export-ModuleMember -Function ConvertTo-TriadeBrasiliaDps,Test-TriadeTimezoneOnlyRevision,Read-TriadeDps,Get-TriadeDpsReview,Protect-TriadeOfflineDps,Test-TriadeSignedDps

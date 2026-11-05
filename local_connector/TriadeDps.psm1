@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Security
 # Restrict XSD imports to the bundled directory. No network or arbitrary file reads.
 if (-not ('TriadeOffline.XmlFiles' -as [type])) {
-Add-Type -TypeDefinition @'
+Add-Type -ReferencedAssemblies 'System.Xml.dll','System.dll' -TypeDefinition @'
 using System;
 using System.IO;
 using System.Net;

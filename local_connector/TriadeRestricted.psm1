@@ -16,7 +16,7 @@ function Write-TriadeDurableFile {
   try{$stream.Write($Bytes,0,$Bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
   if([IO.File]::Exists($Path)){
    if(-not $Replace){throw 'FILE_EXISTS'}
-   [IO.File]::Replace($temp,$Path,$null)
+   [IO.File]::Replace($temp,$Path,[NullString]::Value)
   }else{[IO.File]::Move($temp,$Path)}
  }finally{if([IO.File]::Exists($temp)){[IO.File]::Delete($temp)}}
 }

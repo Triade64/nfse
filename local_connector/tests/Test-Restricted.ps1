@@ -27,6 +27,13 @@ public sealed class TriadeFakeHttp : HttpMessageHandler {
  }
 }
 '@
+$null=& (Get-Module TriadeRestricted) {
+ param($D)
+ $path=Join-Path $D 'atomic-test.txt'
+ Write-TriadeDurableFile -Path $path -Bytes ([Text.Encoding]::UTF8.GetBytes('primeiro'))
+ Write-TriadeDurableFile -Path $path -Bytes ([Text.Encoding]::UTF8.GetBytes('segundo')) -Replace
+ if([IO.File]::ReadAllText($path) -ne 'segundo'){throw 'Substituicao atomica falhou.'}
+} $Directory
 $unsignedDoc=Read-TriadeDps -Bytes $SignedBytes -SchemaDirectory $SchemaDirectory
 $review=Test-TriadeSignedDps -Bytes $SignedBytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory
 $nfse=[Xml.XmlDocument]::new();$nfse.PreserveWhitespace=$true;$nfse.XmlResolver=$null;$nfse.Load((Join-Path $PSScriptRoot 'nfse-ficticia-template.xml'))

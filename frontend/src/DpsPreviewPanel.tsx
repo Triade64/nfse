@@ -67,3 +67,22 @@ export function DpsSeriesPanel(){
  <label className="checkLabel"><input type="checkbox" required checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>Conferi que nenhuma DPS desta empresa e série foi enviada com número igual ou maior.</label>
  {error&&<p role="alert" className="rowError">{error}</p>}{done&&<p role="status">{done}</p>}<button className="primary" disabled={!confirmed}>Salvar numeração</button></form></>}</section>
 }
+
+type DpsRow={id:number;identifier:string;series:string|null;number:number|null;status:string|null;created_at:string|null;discard_reason:string|null};
+export function DpsListPanel(){
+ const [rows,setRows]=useState<DpsRow[]>([]),[target,setTarget]=useState<number|null>(null),[reason,setReason]=useState(''),[confirmed,setConfirmed]=useState(false),[error,setError]=useState(''),[done,setDone]=useState('');
+ async function load(){const r=await fetch('/api/dps');if(r.ok)setRows(await r.json());else setError('Não foi possível listar as DPS.')}
+ useEffect(()=>{load()},[]);
+ async function discard(event:FormEvent){
+  event.preventDefault();setError('');setDone('');
+  const r=await fetch('/api/dps/'+target+'/discard',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'nfse-local'},body:JSON.stringify({reason,confirm_not_authorized:confirmed})});
+  const result=await r.json();if(!r.ok){setError(typeof result.detail==='string'?result.detail:'Informe o motivo (mínimo 5 caracteres) e confirme.');return}
+  setDone('DPS série '+result.series+' nº '+result.number+' descartada. O número não será reutilizado; o rascunho pode reservar um novo número.');setTarget(null);setReason('');setConfirmed(false);await load();
+ }
+ return <section className="card"><h2>DPS reservadas</h2><p>Descarte uma reserva que não será enviada (por exemplo, número que coincide com um teste antigo do conector). O número continua ocupado e nunca é reutilizado; o rascunho fica livre para reservar o próximo número.</p>
+ {done&&<p role="status">{done}</p>}{error&&!target&&<p role="alert" className="rowError">{error}</p>}
+ <table><thead><tr><th>Série / nº</th><th>Situação</th><th>Reservada em</th><th>Ações</th></tr></thead><tbody>{rows.length?rows.map(d=><tr key={d.id}><td>{d.series} / {d.number}</td><td>{d.status}{d.discard_reason?' — '+d.discard_reason:''}</td><td>{d.created_at?new Date(d.created_at).toLocaleString('pt-BR'):''}</td><td><a className="button" href={'/api/dps/'+d.id+'/xml'} download={d.identifier+'.xml'}>XML</a>{d.status==='Reservada'&&<button type="button" onClick={()=>{setTarget(d.id);setError('');setDone('')}}>Descartar</button>}</td></tr>):<tr><td colSpan={4}>Nenhuma DPS reservada.</td></tr>}</tbody></table>
+ {target!==null&&<form onSubmit={discard}><label>Motivo do descarte<input required minLength={5} maxLength={500} value={reason} onChange={e=>setReason(e.target.value)}/></label>
+ <label className="checkLabel"><input type="checkbox" required checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>Confirmo que esta DPS não foi autorizada: não foi enviada, ou o conector registrou rejeição. Descartar uma DPS autorizada permitiria emitir a mesma nota duas vezes.</label>
+ {error&&<p role="alert" className="rowError">{error}</p>}<div className="actions"><button className="primary" disabled={!confirmed}>Descartar reserva</button><button type="button" onClick={()=>setTarget(null)}>Cancelar</button></div></form>}</section>
+}

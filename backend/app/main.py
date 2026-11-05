@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import CLOUD,allowed_hosts,allowed_origins
 from .db import Base, engine, Session, ROOT, DATA, URL
-from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access, DPS, DpsSeries
+from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access, DPS, DpsSeries, DISCARDED, now
 from .security import current_user, db_session, hasher, role, allowed_company, company_ids, issue_session
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
 from .dps_preview import PreviewOptions, ReserveOptions, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, SERIES_PATTERN, BRASILIA
@@ -138,7 +138,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.6.0',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.6.1',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -246,7 +246,7 @@ def reserve_dps(id:int,data:ReserveOptions,u=Depends(current_user),db=Depends(db
     if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
     d=get_or_404(db,Draft,id,locked=True)
     b=get_or_404(db,Batch,d.batch_id);batch_access(db,u,b)
-    existing=db.scalar(select(DPS).where(DPS.draft_id==d.id))
+    existing=db.scalar(select(DPS).where(DPS.draft_id==d.id,active_dps()))
     if existing:return {**dps_public(existing),'existing':True}
     if b.revision!=data.revision:raise HTTPException(409,'Lote alterado. Reabra a conferência.')
     if d.raw!=data.expected_raw:raise HTTPException(409,'Rascunho alterado. Recarregue a tela antes de reservar.')
@@ -278,6 +278,27 @@ def list_dps(batch_id:int|None=None,u=Depends(current_user),db=Depends(db_sessio
     query=select(DPS).order_by(DPS.id.desc()).limit(500)
     if batch_id is not None:query=query.join(Draft,DPS.draft_id==Draft.id).where(Draft.batch_id==batch_id)
     return [dps_public(x) for x in db.scalars(query)]
+
+def active_dps():
+    return (DPS.status.is_(None))|(DPS.status!=DISCARDED)
+
+class DiscardInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    reason:str=Field(min_length=5,max_length=500)
+    confirm_not_authorized:Literal[True]
+
+@app.post('/api/dps/{id}/discard')
+def discard_dps(id:int,data:DiscardInput,u=Depends(current_user),db=Depends(db_session)):
+    """Releases the draft for a new number. The discarded number stays consumed and is never reused.
+    The site does not yet receive submission results, so the operator confirms the DPS was not authorized."""
+    role(u,['admin'])
+    if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+    x=get_or_404(db,DPS,id,locked=True)
+    if x.company_id:allowed_company(db,u,x.company_id)
+    if x.status!='Reservada':raise HTTPException(409,'Somente DPS na situação Reservada pode ser descartada.')
+    x.status=DISCARDED;x.discarded_at=now();x.discarded_by=u.id;x.discard_reason=data.reason.strip()
+    audit(db,u,'discard_dps','dps',x.id,{'draft_id':x.draft_id,'series':x.series,'number':x.number,'environment':x.environment,'reason':x.discard_reason})
+    db.commit();return dps_public(x)
 
 @app.get('/api/dps/{id}/xml')
 def dps_xml(id:int,u=Depends(current_user),db=Depends(db_session)):

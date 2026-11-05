@@ -2,7 +2,7 @@
 import React from 'react';
 import {render,screen,fireEvent,waitFor,cleanup} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import {DpsPreviewPanel} from './DpsPreviewPanel';
+import {DpsPreviewPanel,DpsListPanel} from './DpsPreviewPanel';
 afterEach(()=>{cleanup();vi.unstubAllGlobals()});
 it('requires explicit fiscal choices and reports a changed draft without downloading',async()=>{
  const raw={cnpj_emitente:'11222333000181',nome_tomador:'FICTICIO',competencia:'2026-11-05',valor_servico:'10.00',iss_aliquota:'2.00'};
@@ -39,4 +39,16 @@ it('reserve mode posts to the numbering endpoint without manual number or instan
  const [url,init]=fetcher.mock.calls[2];expect(url).toBe('/api/drafts/7/dps');
  const payload=JSON.parse(init.body);expect(payload.confirm_reserve).toBe(true);expect(payload.number).toBeUndefined();expect(payload.issued_at).toBeUndefined();expect(payload.reg_ap_trib_sn).toBeNull();
  expect(click).toHaveBeenCalled();
+});
+it('discard requires reason and explicit confirmation, then reloads the list',async()=>{
+ const rows=[{id:3,identifier:'DPSX1',series:'1',number:1,status:'Reservada',created_at:'2026-11-05T16:00:00Z',discard_reason:null}];
+ const fetcher=vi.fn().mockResolvedValueOnce({ok:true,json:async()=>rows}).mockResolvedValueOnce({ok:true,json:async()=>({...rows[0],status:'Descartada'})}).mockResolvedValueOnce({ok:true,json:async()=>[{...rows[0],status:'Descartada',discard_reason:'Teste antigo'}]});
+ vi.stubGlobal('fetch',fetcher);render(<DpsListPanel/>);
+ fireEvent.click(await screen.findByRole('button',{name:'Descartar'}));
+ const submit=screen.getByRole('button',{name:'Descartar reserva'}) as HTMLButtonElement;expect(submit.disabled).toBe(true);
+ fireEvent.change(screen.getByLabelText('Motivo do descarte'),{target:{value:'Teste antigo'}});
+ fireEvent.click(screen.getByRole('checkbox'));fireEvent.submit(submit.closest('form')!);
+ await waitFor(()=>expect(screen.getByRole('status').textContent).toContain('nº 1 descartada'));
+ const [url,init]=fetcher.mock.calls[1];expect(url).toBe('/api/dps/3/discard');expect(JSON.parse(init.body)).toEqual({reason:'Teste antigo',confirm_not_authorized:true});
+ expect(screen.queryByRole('button',{name:'Descartar'})).toBeNull();
 });

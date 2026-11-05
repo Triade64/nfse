@@ -83,3 +83,45 @@ def test_non_admin_cannot_reserve_or_read_xml(admin,company,row):
     assert admin.get(f'/api/dps/{r["id"]}/xml').status_code==403
     assert configure(admin,company,99).status_code==403
     assert reserve(admin,b,b['rows'][0]).status_code==403
+
+def discard(admin,dps_id,**change):
+    return admin.post(f'/api/dps/{dps_id}/discard',json={'reason':'Número coincide com teste antigo','confirm_not_authorized':True,**change})
+
+def test_discard_releases_draft_for_next_number_without_reuse(admin,company,row):
+    configure(admin,company,1)
+    b=batch_with(admin,[row]);d=b['rows'][0]
+    first=reserve(admin,b,d).json();assert first['number']==1
+    assert discard(admin,first['id'],confirm_not_authorized=False).status_code==422
+    assert discard(admin,first['id'],reason='abc').status_code==422
+    r=discard(admin,first['id']);assert r.status_code==200 and r.json()['status']=='Descartada'
+    assert discard(admin,first['id']).status_code==409  # already discarded
+    second=reserve(admin,b,d);assert second.status_code==200,second.text
+    assert second.json()['number']==2 and not second.json()['existing']
+    again=reserve(admin,b,d).json();assert again['existing'] and again['number']==2
+    with Session() as db:
+        rows=list(db.scalars(select(DPS).order_by(DPS.number)))
+        assert [(x.number,x.status) for x in rows]==[(1,'Descartada'),(2,'Reservada')]
+        assert rows[0].xml and rows[0].discard_reason=='Número coincide com teste antigo'
+        assert db.scalar(select(DpsSeries)).next_number==3
+        assert len(list(db.scalars(select(Audit).where(Audit.action=='discard_dps'))))==1
+    listed=admin.get('/api/dps').json();assert {x['status'] for x in listed}=={'Descartada','Reservada'}
+    assert admin.get(f'/api/dps/{first["id"]}/xml').status_code==200  # history stays readable
+    with Session() as db:rev=db.scalar(select(DpsSeries)).revision
+    assert configure(admin,company,2,rev).status_code==409  # discarded/reserved numbers never come back
+
+def test_database_allows_only_one_active_dps_per_draft(admin,company,row):
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+    configure(admin,company,1)
+    b=batch_with(admin,[row]);d=b['rows'][0];reserve(admin,b,d)
+    with Session() as db:
+        base=db.scalar(select(DPS))
+        db.add(DPS(draft_id=base.draft_id,environment='2',identifier='OUTRO-ID',company_id=base.company_id,series='1',number=99,status='Reservada'))
+        with pytest.raises(IntegrityError):db.commit()
+
+def test_operator_cannot_discard(admin,company,row):
+    configure(admin,company,1)
+    b=batch_with(admin,[row]);r=reserve(admin,b,b['rows'][0]).json()
+    admin.post('/api/users',json={'username':'operador2','password':'Senha-ficticia-789!','role':'operator','company_ids':[company['id']]})
+    admin.post('/api/logout');admin.post('/api/login',json={'username':'operador2','password':'Senha-ficticia-789!'})
+    assert discard(admin,r['id']).status_code==403

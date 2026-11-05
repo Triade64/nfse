@@ -51,9 +51,13 @@ function ConvertFrom-TriadeXmlEnvelope {
  }finally{if($null -ne $gzip){$gzip.Dispose()};$source.Dispose();$target.Dispose()}
 }
 function New-TriadeFiscalRequest {
- param([ValidateSet('GET_DPS','GET_NFSE','POST_DPS')][string]$Operation,[string]$Identifier,[byte[]]$Xml)
+ param([ValidateSet('HEAD_DPS','GET_DPS','GET_NFSE','POST_DPS')][string]$Operation,[string]$Identifier,[byte[]]$Xml)
  $base='https://sefin.producaorestrita.nfse.gov.br/SefinNacional'
  switch($Operation){
+  HEAD_DPS {
+   if($Identifier -cnotmatch '^DPS[0-9]{42}$'){throw 'XML_ID'}
+   return [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Head,($base+'/dps/'+$Identifier))
+  }
   GET_DPS {
    if($Identifier -cnotmatch '^DPS[0-9]{42}$'){throw 'XML_ID'}
    return [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get,($base+'/dps/'+$Identifier))
@@ -168,11 +172,18 @@ function Invoke-TriadeSingleRestrictedDps {
   }
   $phase='CONSULTAR_DPS'
   # Always reconcile, including after a previous timeout or a process crash.
-  $lookup=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation GET_DPS -Identifier $review.identifier)
+  $lookup=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation HEAD_DPS -Identifier $review.identifier)
   $lastHttp=$lookup.status;$phase='GRAVAR_CONSULTA'
   Write-TriadeDurableFile -Path (Join-Path $directory 'ultima-consulta.json') -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($lookup.text)) -Replace
   $phase='VALIDAR_CONSULTA'
+  if(-not [string]::IsNullOrWhiteSpace($lookup.text)){throw 'RESPONSE_FORMAT'}
   if($lookup.status -eq 200){
+   $phase='RECUPERAR_CHAVE_DPS'
+   $lookup=Invoke-TriadeFiscalHttp -Client $Client -Request (New-TriadeFiscalRequest -Operation GET_DPS -Identifier $review.identifier)
+   $lastHttp=$lookup.status
+   Write-TriadeDurableFile -Path (Join-Path $directory 'consulta-chave-dps.json') -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($lookup.text)) -Replace
+   if($lookup.status -ne 200){throw 'NFSE_RECOVERY_PENDING'}
+   $phase='VALIDAR_CONSULTA'
    $found=Read-TriadeFiscalJson -Response $lookup
    if($found.idDps -ne $review.identifier -or $found.chaveAcesso -notmatch '^[0-9]{50}$'){throw 'RESPONSE_ID'}
    $state.status='Localizada; documento pendente';$state.attempted=$true;$state.access_key=$found.chaveAcesso
@@ -189,8 +200,6 @@ function Invoke-TriadeSingleRestrictedDps {
    return Get-TriadeRestrictedResult -State $state -Message 'NFS-e de teste localizada e XML recuperado. Nenhum POST foi realizado nesta execução.' -HttpStatus 200
   }
   if($lookup.status -ne 404){return Get-TriadeRestrictedResult -State $state -Message 'A consulta prévia não confirmou ausência da DPS. Envio bloqueado; confira o HTTP e consulte novamente.' -HttpStatus $lookup.status}
-  $notFound=Read-TriadeFiscalJson -Response $lookup
-  if($null -eq $notFound.erro){throw 'RESPONSE_FORMAT'}
   if($state.attempted){return Get-TriadeRestrictedResult -State $state -Message 'Consulta retornou 404, mas existe tentativa anterior registrada. Reenvio bloqueado; o resultado anterior precisa ser reconciliado.' -HttpStatus 404}
   if(-not $ConfirmRestrictedSend){return Get-TriadeRestrictedResult -State $state -Message 'Consulta retornou 404. Nenhuma tentativa de envio registrada neste PC e nenhum POST realizado.' -HttpStatus 404}
   $phase='PREPARAR_ENVIO'

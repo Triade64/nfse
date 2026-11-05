@@ -58,3 +58,10 @@ Depois de atualizar, selecione o certificado do escritorio e use SOMENTE Consult
 Em uma falha, o resultado mostra etapa, ultimo HTTP recebido quando disponivel, motivo conhecido ou UNCLASSIFIED, categoria, tipos de excecao e codigos numericos. Nao copia mensagens internas, caminhos completos, CNPJ, nome do titular ou XML.
 O diagnostico distingue se um POST pode ter sido iniciado NESTA EXECUCAO. Isso nao descarta tentativas anteriores; mantenha o historico. Compartilhe apenas o resultado do conector para analise.
 Para evitar o bloqueio de scripts baixados, use Propriedades > Desbloquear no ZIP antes de Extrair tudo. Nao altere a politica global do Windows. Se houver bloqueio corporativo, consulte a TI.
+
+
+VERSAO 0.8.2 - CONSULTA PREVIA HEAD
+A resposta GET de erro no PC apresentou tipoAmbiente inteiro 0. Esse valor nao e tratado como homologacao.
+A consulta previa agora usa HEAD /dps/{id}, documentado para retornar 200/400/404 sem corpo. HEAD 404 permite continuar apenas se nao existir tentativa anterior e houver confirmacao explicita de envio. HEAD 200 leva a GET /dps/{id} e recuperacao da NFS-e, sem POST.
+Respostas GET de sucesso e autorizacao POST continuam exigindo ambiente 2. Nenhum destino foi alterado; producao real permanece bloqueada. Historico e XML anteriores sao preservados.
+Depois da atualizacao, use primeiro SOMENTE Consultar resultado com o mesmo XML e certificado e compartilhe o diagnostico. Nao apague o historico.

@@ -19,7 +19,7 @@ public sealed class TriadeFakeHttp : HttpMessageHandler {
  protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
   string method=request.Method.Method;Calls.Add(method+" "+request.RequestUri.AbsoluteUri);
   if(request.RequestUri.Host!="sefin.producaorestrita.nfse.gov.br" || request.RequestUri.Scheme!="https" || request.RequestUri.Port!=443)throw new Exception("URL_UNSAFE");
-  if(method=="GET" && TimeoutOnGet)throw new TaskCanceledException("SEGREDO-FICTICIO-NAO-COPIAR");
+  if((method=="GET" || method=="HEAD") && TimeoutOnGet)throw new TaskCanceledException("SEGREDO-FICTICIO-NAO-COPIAR");
   if(method=="POST"){
    if(!System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(Marker),"\"attempted\"\\s*:\\s*true"))throw new Exception("MARKER_NOT_DURABLE_BEFORE_POST");
    if(TimeoutOnPost)throw new TaskCanceledException("FICTICIO-SEM-SEGREDO");
@@ -52,7 +52,7 @@ $success=@{tipoAmbiente=2;idDps=$review.identifier;chaveAcesso=$key;nfseXmlGZipB
 # Exercise the real parser/recovery separately so failures are visible in the synthetic test.
 $null=& (Get-Module TriadeRestricted) {param($B,$R,$D,$S) Save-TriadeReturnedNfse -Body $B -Identifier $R.identifier -Key $B.chaveAcesso -Directory $D -SchemaDirectory $S -Review $R} ($success|ConvertFrom-Json) $review $Directory $SchemaDirectory
 $found=@{tipoAmbiente=2;idDps=$review.identifier;chaveAcesso=$key}|ConvertTo-Json -Compress
-$missing='{"tipoAmbiente":2,"erro":{"codigo":"TESTE404","descricao":"FICTICIO"}}'
+$missing=''
 $rejected='{"tipoAmbiente":2,"erros":[{"codigo":"TESTE_REJEICAO","descricao":"FICTICIO"}]}'
 function New-FakeClient([string]$Name,[int[]]$Statuses,[string[]]$Bodies){
  $journal=Join-Path $Directory $Name;$handler=[TriadeFakeHttp]::new();$handler.Marker=Join-Path (Join-Path $journal $review.identifier) 'estado.json'
@@ -66,7 +66,7 @@ $clients=@()
 try{
  $case=New-FakeClient 'somente-consulta' @(404) @($missing);$clients+=$case
  $result=Invoke-Case $case $false
- if($result.attempted -or $case.handler.Calls.Count -ne 1 -or $case.handler.Calls[0] -notmatch '^GET '){throw 'Consulta fez POST.'}
+ if($result.attempted -or $case.handler.Calls.Count -ne 1 -or $case.handler.Calls[0] -notmatch '^HEAD '){throw 'Consulta fez POST.'}
  $case=New-FakeClient 'timeout-consulta' @() @();$clients+=$case;$case.handler.TimeoutOnGet=$true
  $result=Invoke-Case $case $false
  if($result.state -ne 'Novo' -or $result.diagnostic.stage -ne 'CONSULTAR_DPS' -or $result.diagnostic.category -ne 'timeout' -or $result.diagnostic.post_possible_this_run -or $result.http_status -ne 0){throw 'Timeout de consulta nao foi identificado.'}
@@ -74,9 +74,9 @@ try{
  $case=New-FakeClient 'utf8-invalido' @(404) @('');$clients+=$case;$case.handler.InvalidUtf8=$true
  $result=Invoke-Case $case $false
  if($result.http_status -ne 404 -or $result.diagnostic.stage -ne 'CONSULTAR_DPS' -or $result.diagnostic.post_possible_this_run){throw 'Falha ao ler corpo perdeu HTTP recebido.'}
- $case=New-FakeClient '404-vazio' @(404) @('');$clients+=$case
+ $case=New-FakeClient '200-ambiente-zero' @(200,200) @('','{"tipoAmbiente":0}');$clients+=$case
  $result=Invoke-Case $case $false
- if($result.http_status -ne 404 -or $result.diagnostic.stage -ne 'VALIDAR_CONSULTA' -or $result.diagnostic.reason -ne 'RESPONSE_FORMAT' -or $result.diagnostic.post_possible_this_run){throw 'HTTP 404 vazio perdeu o diagnostico.'}
+ if($result.http_status -ne 200 -or $result.diagnostic.stage -ne 'VALIDAR_CONSULTA' -or $result.diagnostic.reason -ne 'RESPONSE_ENVIRONMENT' -or $result.diagnostic.post_possible_this_run){throw 'Ambiente zero em resposta de sucesso nao foi bloqueado.'}
  $case=New-FakeClient 'gravacao-consulta' @(404) @($missing);$clients+=$case
  $null=[IO.Directory]::CreateDirectory((Join-Path (Join-Path $case.root $review.identifier) 'ultima-consulta.json'))
  $result=Invoke-Case $case $false
@@ -89,7 +89,7 @@ try{
  if(@($case.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 1){throw 'POST repetido apos sucesso.'}
  $statePath=Join-Path (Join-Path $case.root $review.identifier) 'estado.json';$state=[IO.File]::ReadAllText($statePath)|ConvertFrom-Json
  if(-not $state.attempted -or $state.nfse_sha256.Length -ne 64){throw 'Resultado nao persistido.'}
- $case=New-FakeClient 'timeout' @(404,404,200,200) @($missing,$missing,$found,$success);$clients+=$case;$case.handler.TimeoutOnPost=$true
+ $case=New-FakeClient 'timeout' @(404,404,200,200,200) @($missing,$missing,'',$found,$success);$clients+=$case;$case.handler.TimeoutOnPost=$true
  $result=Invoke-Case $case $true
  if($result.state -ne 'Situação desconhecida; consultar' -or $result.diagnostic.stage -ne 'ENVIAR_DPS' -or -not $result.diagnostic.post_possible_this_run){throw 'Timeout nao manteve estado e etapa desconhecidos.'}
  $result=Invoke-Case $case $true
@@ -113,9 +113,10 @@ try{
   $null=Invoke-Case $case $true
   if(@($case.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 1){throw 'Retorno ambiguo foi reenviado.'}
  }
- $case=New-FakeClient 'ja-existe' @(200,200) @($found,$success);$clients+=$case
+ $case=New-FakeClient 'ja-existe' @(200,200,200) @('',$found,$success);$clients+=$case
  $result=Invoke-Case $case $true
  if($result.state -ne 'Autorizada em teste' -or @($case.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 0){throw 'DPS existente enviada de novo.'}
+ if(($case.handler.Calls|ForEach-Object{$_.Split(' ')[0]}) -join ',' -ne 'HEAD,GET,GET'){throw 'Sequencia de consulta nao segue o contrato HEAD/GET.'}
  $case=New-FakeClient 'adulterado' @(404,201) @($missing,$success);$clients+=$case
  $tampered=([Text.Encoding]::UTF8.GetString($SignedBytes)).Replace('<vServ>10.00</vServ>','<vServ>11.00</vServ>')
  $blocked=$false;try{$null=Invoke-TriadeSingleRestrictedDps -Bytes ([Text.Encoding]::UTF8.GetBytes($tampered)) -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $case.root -Client $case.client -ConfirmRestrictedSend}catch{$blocked=$true}
@@ -132,6 +133,6 @@ try{
  if(-not $blocked){throw 'GZip excessivo nao bloqueado.'}
  $warnings=@();Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'TriadeDps.psm1') -Force -WarningVariable warnings
  if($warnings.Count -ne 0){throw 'Aviso de verbo nao aprovado permanece.'}
- Write-Output 'PASS: diagnostico seguro de timeout antes e depois do POST, HTTP 404 vazio e falha de gravacao, sem mensagem interna ou caminho privado.'
+ Write-Output 'PASS: diagnostico seguro de timeout antes e depois do POST, ambiente zero em sucesso bloqueado e falha de gravacao, sem mensagem interna ou caminho privado.'
  Write-Output 'PASS: transporte simulado, confirmacao, journal antes do POST, 201/400/500, timeout, consulta sem reenvio, ambiente incorreto, redirect, GZip e verbos aprovados. Nenhuma chamada fiscal real.'
 }finally{foreach($item in $clients){$item.client.Dispose()}}

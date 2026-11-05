@@ -39,3 +39,8 @@ Também substitui o verbo não aprovado `Sign` por `Protect` no módulo, removen
 Após o operador informar falha genérica com estado Novo, acrescentados etapa de falha, último HTTP recebido, motivo conhecido, categoria, tipos e códigos numéricos seguros. Exceções durante a leitura do corpo preservam o HTTP recebido nos metadados da exceção, sem copiar sua mensagem.
 
 A atualização não muda contrato fiscal, regras de reenvio, destino ou formato do journal. O operador deve usar somente Consultar resultado com o mesmo XML e certificado; a causa da falha informada ainda depende desse diagnóstico no PC. Testes sintéticos cobrem timeout antes/depois do POST, HTTP 404 vazio, corpo UTF-8 inválido, falha de gravação e ausência de mensagens internas/caminhos privados no diagnóstico.
+
+
+## Atualização 0.8.2 — existência por HEAD
+
+Operador confirmou tipoAmbiente System.Int32=0 na resposta HTTP 404 de GET. Não é aceito como ambiente de homologação. A consulta prévia passa a HEAD /dps/{id}, cujo contrato documenta 200/400/404 sem JSON. HEAD 404 e ausência de tentativa anterior permitem POST somente com confirmação explícita; HEAD 200 leva a GET para recuperar chave/documento sem POST. GET de sucesso e resposta de autorização mantêm validação estrita de ambiente=2. Destino, journal e bloqueio de reenvio permanecem os mesmos. Teste inicial solicitado ao operador: somente consulta.

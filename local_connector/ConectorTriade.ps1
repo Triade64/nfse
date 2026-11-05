@@ -1,5 +1,5 @@
 ﻿#requires -Version 5.1
-param([switch]$SelfTest)
+param([switch]$SelfTest,[string]$Url,[switch]$RegisterProtocol)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Este conector requer Windows.' }
@@ -8,11 +8,12 @@ Add-Type -AssemblyName System.Drawing
 Import-Module (Join-Path $PSScriptRoot 'TriadeConnector.Core.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'TriadeDps.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'TriadeRestricted.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'TriadeSite.psm1') -Force
 [Windows.Forms.Application]::EnableVisualStyles()
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.8.5'
+$form.Text = 'Tríade NFS-e | Conector local 0.9.0'
 $form.ClientSize = [Drawing.Size]::new(720,705)
 $form.MinimumSize = [Drawing.Size]::new(736,744)
 $form.StartPosition = 'CenterScreen'
@@ -25,6 +26,7 @@ $null=Add-Label 'Certificado e senha permanecem neste computador' 18 30
 $null=Add-Label 'Produção restrita: assinatura local e envio unitário com confirmação. Produção real bloqueada.' 53 45
 $windowsButton=[Windows.Forms.Button]::new();$windowsButton.Text='Selecionar certificado do Windows';$windowsButton.SetBounds(22,105,330,38);$form.Controls.Add($windowsButton)
 $selection=Add-Label 'Nenhum certificado selecionado.' 150 45
+$protocolButton=[Windows.Forms.Button]::new();$protocolButton.Text='Ativar abertura pelo site';$protocolButton.SetBounds(367,105,330,38);$form.Controls.Add($protocolButton)
 $null=Add-Label 'Ou use um arquivo A1 local (.pfx/.p12), sem instalar a chave:' 203 30
 $fileBox=[Windows.Forms.TextBox]::new();$fileBox.ReadOnly=$true;$fileBox.SetBounds(22,237,555,28);$form.Controls.Add($fileBox)
 $fileButton=[Windows.Forms.Button]::new();$fileButton.Text='Selecionar A1';$fileButton.SetBounds(585,234,112,34);$form.Controls.Add($fileButton)
@@ -245,6 +247,75 @@ $saveApi.Add_Click({
         $output.Text=$script:lastSummary;$copy.Enabled=$true
     } finally { $dialog.Dispose();$saveApi.Enabled=$true;$run.Enabled=$true;$windowsButton.Enabled=$true;$fileButton.Enabled=$true;$form.UseWaitCursor=$false }
 })
+$protocolButton.Add_Click({
+    try {
+        $command=Register-TriadeProtocol -ScriptPath $PSCommandPath
+        $script:lastSummary=@('Abertura pelo site ativada para este usuário do Windows (sem administrador).','Agora o botão "Assinar e enviar" do site abre este conector, a partir desta pasta.','Se mover ou atualizar a pasta do conector, clique de novo neste botão.','Sites autorizados: '+((Get-TriadeAllowedSites) -join ', ')) -join [Environment]::NewLine
+    } catch { $script:lastSummary='Não foi possível ativar a abertura pelo site: '+$_.Exception.Message }
+    $output.Text=$script:lastSummary;$copy.Enabled=$true
+})
+function Get-TriadeCertificateCnpj([Security.Cryptography.X509Certificates.X509Certificate2]$Certificate) {
+    foreach($extension in $Certificate.Extensions){ if($extension.Oid.Value -eq '2.5.29.17'){ try { return [TriadeOffline.Cnpj]::FromSan($extension.RawData) } catch { return $null } } }
+    return $null
+}
+function Select-TriadeCertificateFor([string]$Cnpj) {
+    if ($null -ne $script:selectedCertificate -and (Get-TriadeCertificateCnpj $script:selectedCertificate) -eq $Cnpj) { return $script:selectedCertificate }
+    $available=Get-TriadeWindowsCertificates
+    $matching=[Security.Cryptography.X509Certificates.X509Certificate2Collection]::new()
+    foreach($c in $available){ if((Get-TriadeCertificateCnpj $c) -eq $Cnpj -and $c.NotAfter -gt (Get-Date)){ [void]$matching.Add($c) } }
+    if ($matching.Count -eq 0) { throw 'CERT_NOT_FOUND' }
+    $picked=$matching
+    if ($matching.Count -gt 1) { $picked=[Security.Cryptography.X509Certificates.X509Certificate2UI]::SelectFromCollection($matching,'Tríade NFS-e','Selecione o certificado do emitente '+$Cnpj+'.',[Security.Cryptography.X509Certificates.X509SelectionFlag]::SingleSelection,$form.Handle) }
+    if ($picked.Count -eq 0) { throw 'CERT_NOT_SELECTED' }
+    $chosen=[Security.Cryptography.X509Certificates.X509Certificate2]::new($picked[0])
+    if ($null -ne $script:selectedCertificate) { $script:selectedCertificate.Dispose() }
+    $script:selectedCertificate=$chosen
+    $selection.Text='Certificado do Windows: '+$chosen.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false)+' (válido até '+$chosen.NotAfter.ToString('dd/MM/yyyy')+')'
+    return $chosen
+}
+function Invoke-TriadeSiteFlow([string]$LaunchUrl) {
+    $siteClient=$null;$fiscalClient=$null;$lines=@()
+    try {
+        $launch=Resolve-TriadeLaunchUrl -Url $LaunchUrl
+        $output.Text='Buscando as notas no site '+$launch.site+' ...';$form.Refresh()
+        $siteClient=New-TriadeSiteClient
+        $jobs=@(Get-TriadeSiteJobs -Client $siteClient -Site $launch.site -Ticket $launch.ticket | Where-Object { $_.status -in @('Reservada','Desconhecida') })
+        if ($jobs.Count -eq 0) { $output.Text='Nenhuma DPS pendente neste link. Volte ao site e atualize a lista.';return }
+        $issuers=@($jobs|ForEach-Object{[string]$_.summary.cnpj}|Select-Object -Unique)
+        if ($issuers.Count -ne 1) { throw 'SITE_MIXED_ISSUERS' }
+        $list=@($jobs|ForEach-Object{('Série '+$_.series+' nº '+$_.number+' — '+$_.summary.tomador+' — competência '+$_.summary.competencia+' — R$ '+$_.summary.valor+$(if($_.status -eq 'Desconhecida'){' (consultar tentativa anterior)'}else{''}))})
+        $question=@(('Site: '+$launch.site),('Emitente (CNPJ): '+$issuers[0]),('Notas: '+$jobs.Count),'') + $list + @('','AUTORIZA ASSINAR E ENVIAR ESTAS DPS À PRODUÇÃO RESTRITA (TESTES)?','Cada nota é consultada antes do envio; tentativas anteriores nunca são reenviadas. A chave privada não sai deste PC. Produção real bloqueada.')
+        if ([Windows.Forms.MessageBox]::Show($form,($question -join [Environment]::NewLine),'Tríade | Assinar e enviar notas do site',[Windows.Forms.MessageBoxButtons]::YesNo,[Windows.Forms.MessageBoxIcon]::Warning,[Windows.Forms.MessageBoxDefaultButton]::Button2) -ne [Windows.Forms.DialogResult]::Yes) { $output.Text='Cancelado. Nenhuma DPS assinada ou enviada.';return }
+        $certificate=Select-TriadeCertificateFor $issuers[0]
+        $local=[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+        if([string]::IsNullOrWhiteSpace($local)){throw 'LOCAL_DATA_UNAVAILABLE'}
+        $journal=Join-Path $local 'TriadeNfse\Conector\producao-restrita'
+        $fiscalClient=[Net.Http.HttpClient]::new((New-TriadeRestrictedHandler -Certificate $certificate));$fiscalClient.Timeout=[TimeSpan]::FromSeconds(35)
+        $form.Enabled=$false;$form.UseWaitCursor=$true
+        foreach($job in $jobs){
+            $label='Série '+$job.series+' nº '+$job.number
+            $output.Text=(($lines+@($label+': assinando e enviando...')) -join [Environment]::NewLine);$form.Refresh()
+            try {
+                $result=Invoke-TriadeSiteJob -Job $job -Certificate $certificate -SchemaDirectory (Join-Path $PSScriptRoot 'schemas') -JournalRoot $journal -FiscalClient $fiscalClient -SiteClient $siteClient -Site $launch.site -Ticket $launch.ticket
+                $extra=@();if($result.codes){$extra+='códigos '+$result.codes};if($result.PSObject.Properties['diagnostic']){$extra+='etapa '+$result.diagnostic.stage+' / '+$result.diagnostic.reason}
+                $lines+=$label+': '+$result.state+' (HTTP '+$result.http_status+')'+$(if($extra){' — '+($extra -join '; ')}else{''})
+            } catch {
+                $code=$_.Exception.Message;if($code -notmatch '^[A-Z0-9_]{3,40}$'){$code='UNCLASSIFIED'}
+                $lines+=$label+': não concluída ('+$code+'). Se houve envio, o histórico deste PC guarda o resultado; gere um novo link no site para consultar.'
+                if($code -eq 'SITE_TICKET_EXPIRED'){break}
+            }
+        }
+        $script:lastSummary=(@('Tríade NFS-e | conector 0.9.0 pelo site','Ambiente: produção restrita (testes). Produção real bloqueada.') + $lines + @('','Volte ao site: a tela Notas atualiza a situação de cada nota.')) -join [Environment]::NewLine
+    } catch {
+        $code=$_.Exception.Message;if($code -notmatch '^[A-Z0-9_]{3,40}$'){$code='UNCLASSIFIED'}
+        $hint=@{LAUNCH_URL_INVALID='Link inválido. Gere de novo no site.';SITE_NOT_ALLOWED='Este link aponta para um site não autorizado. Nada foi feito.';SITE_TICKET_EXPIRED='O link expirou (15 minutos). Gere de novo no site.';CERT_NOT_FOUND='Nenhum certificado do Windows com o CNPJ do emitente foi encontrado.';CERT_NOT_SELECTED='Nenhum certificado selecionado.';SITE_MIXED_ISSUERS='O link mistura emitentes diferentes.'}[$code]
+        $script:lastSummary=@('Não foi possível processar o link do site. Nenhuma DPS enviada nesta etapa.',('Código: '+$code),$hint) -join [Environment]::NewLine
+    } finally {
+        if($null -ne $fiscalClient){$fiscalClient.Dispose()};if($null -ne $siteClient){$siteClient.Dispose()}
+        $form.Enabled=$true;$form.UseWaitCursor=$false
+        $output.Text=$script:lastSummary;$copy.Enabled=$true
+    }
+}
 $copy.Add_Click({ if ($script:lastSummary.Length -gt 0) { [Windows.Forms.Clipboard]::SetText($script:lastSummary) } })
 $form.Add_FormClosed({ $password.Clear();if ($null -ne $script:selectedCertificate) { $script:selectedCertificate.Dispose();$script:selectedCertificate=$null } })
 if ($SelfTest) {
@@ -253,4 +324,10 @@ if ($SelfTest) {
     if ($pickerMethods.Count -eq 0) { throw 'Seletor Windows indisponível.' }
     if ($form.Controls.Count -lt 10 -or -not $password.UseSystemPasswordChar -or $network.Checked) { throw 'Falha na construção da interface.' }
     $form.Dispose();Write-Output 'PASS: interface Windows construída, senha mascarada, conexão externa desmarcada.'
-} else { [void]$form.ShowDialog();$form.Dispose() }
+} elseif ($RegisterProtocol) {
+    $command=Register-TriadeProtocol -ScriptPath $PSCommandPath;$form.Dispose()
+    [void][Windows.Forms.MessageBox]::Show('Abertura pelo site ativada para este usuário do Windows.','Tríade NFS-e')
+} else {
+    if ($Url) { $form.Add_Shown({ Invoke-TriadeSiteFlow $Url }) }
+    [void]$form.ShowDialog();$form.Dispose()
+}

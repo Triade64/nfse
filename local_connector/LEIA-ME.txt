@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.8.5 - RECONHECE A AUTORIZACAO REAL (idDps)
+TRIADE NFS-e | CONECTOR LOCAL 0.9.0 - ABERTURA PELO SITE (ASSINAR E ENVIAR)
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -89,4 +89,11 @@ VERSAO 0.8.5 - RECONHECE A RESPOSTA REAL DE AUTORIZACAO
 Na primeira autorizacao real (05/11/2026, DPS serie 1 n 3) a API respondeu HTTP 201 com idDps igual ao Id da NFS-e ("NFS" + chave de acesso), e nao ao Id da DPS como descreve o Swagger. A versao 0.8.4 tratou isso como RESPONSE_ID e marcou "Situacao desconhecida; consultar", embora a NFS-e estivesse autorizada.
 A 0.8.5 aceita idDps igual ao Id da DPS OU exatamente "NFS" + a chave de 50 digitos devolvida, no envio e na consulta. Qualquer outro valor continua bloqueado. As conferencias que realmente vinculam a nota a SUA DPS nao mudaram: XSD da NFS-e, Id NFS+chave, Id da DPS, ambiente 2, CNPJ, competencia e valor dentro do XML devolvido.
 Se o envio anterior ficou como "Situacao desconhecida; consultar": atualize o conector, selecione o certificado e use SOMENTE Consultar resultado com o MESMO XML assinado. A consulta faz HEAD/GET, recupera a NFS-e e grava "Autorizada em teste" com a chave. Nenhum POST e feito. Nao envie de novo nem use outro numero para a mesma nota.
+Producao real continua bloqueada.
+
+
+VERSAO 0.9.0 - O SITE ABRE O CONECTOR (ASSINAR E ENVIAR)
+Instalacao, uma vez por PC e usuario do Windows: extraia o ZIP numa pasta fixa e abra Ativar_Abertura_pelo_Site.cmd. Isso registra o link triade-nfse:// somente para o seu usuario (HKCU), sem administrador. Se mover ou atualizar a pasta, rode de novo. Tambem ha o botao "Ativar abertura pelo site" na janela do conector.
+Uso: na tela Notas do site, clique em Assinar e enviar (uma nota ou varias selecionadas). O navegador pergunta se pode abrir o Triade Conector: confirme. O conector busca as notas reservadas, mostra emitente, tomadores, competencias e valores e pede UMA confirmacao para o lote. Depois escolhe o certificado do Windows com o CNPJ do emitente (pergunta se houver mais de um), assina, consulta a SEFIN e envia cada nota uma vez, e devolve o resultado ao site (autorizada com chave e XML da NFS-e, rejeitada com o codigo, ou situacao desconhecida para consultar depois).
+Seguranca: o link vale 15 minutos e somente para as notas escolhidas. O conector so aceita links do site https://nfse-sand.vercel.app (lista fixa no programa) e recusa qualquer outro endereco antes de acessar a rede. O XML recebido precisa ter o mesmo SHA-256 guardado pelo site; XSD, ambiente 2, prestador emitente e CNPJ do certificado sao conferidos de novo no PC. O site confere a NFS-e devolvida contra a DPS que reservou antes de marcar como autorizada. A chave privada e a senha nunca saem do PC. O historico em LocalAppData\TriadeNfse continua sendo a referencia: nunca apague.
 Producao real continua bloqueada.

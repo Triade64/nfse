@@ -88,12 +88,21 @@ function Get-TriadeJournalOutcome {
  return $outcome
 }
 
+function Get-TriadeJobEnvironment {
+ # Jobs from sites before 0.10.0 have no environment field: they are restricted (tpAmb 2).
+ param($Job)
+ $property=$Job.PSObject.Properties['environment']
+ $value=if($null -eq $property -or $null -eq $property.Value){'2'}else{[string]$property.Value}
+ if($value -notin @('1','2')){throw 'SITE_JOB_ENVIRONMENT'}
+ return $value
+}
+
 function Send-TriadeSiteResult {
  param([Net.Http.HttpClient]$Client,[string]$Site,[string]$Ticket,[int]$DpsId,$Result,[string]$SignedSha256,[string]$JournalRoot,[string]$Identifier)
  $state=[string]$Result.state
- if($state -notin @('Autorizada em teste','Rejeitada em teste')){$state='Situação desconhecida; consultar'}
+ if($state -notin @('Autorizada em teste','Rejeitada em teste','Autorizada em produção','Rejeitada em produção')){$state='Situação desconhecida; consultar'}
  $payload=[ordered]@{state=$state;http_status=[int]$Result.http_status;codes=[string]$Result.codes;message=[string]$Result.message;signed_sha256=$SignedSha256}
- if($state -eq 'Autorizada em teste'){
+ if($state -like 'Autorizada em *'){
   $outcome=Get-TriadeJournalOutcome -JournalRoot $JournalRoot -Identifier $Identifier
   if(-not $outcome.access_key -or -not $outcome.nfse_xml_b64){throw 'NFSE_RECOVERY_PENDING'}
   $payload.access_key=$outcome.access_key;$payload.nfse_xml_b64=$outcome.nfse_xml_b64
@@ -122,22 +131,24 @@ function Send-TriadeSiteDanfse {
 function Invoke-TriadeSiteJob {
  # One DPS: integrity -> local XSD/CNPJ/certificate checks + signature -> journaled submission -> report to site.
  param($Job,[Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[string]$SchemaDirectory,[string]$JournalRoot,
-       [Net.Http.HttpClient]$FiscalClient,[Net.Http.HttpClient]$SiteClient,[string]$Site,[string]$Ticket,[switch]$FetchDanfse)
+       [Net.Http.HttpClient]$FiscalClient,[Net.Http.HttpClient]$SiteClient,[string]$Site,[string]$Ticket,[switch]$FetchDanfse,[ValidateSet('1','2')][string]$Environment='2')
+ # The caller chooses schema folder, journal and confirmation for ONE environment; a job from another one is refused.
+ if((Get-TriadeJobEnvironment -Job $Job) -ne $Environment){throw 'SITE_JOB_ENVIRONMENT'}
  # 0.9.2: no contributor DANFSe API is published (ADN restricted /danfse -> 404, production docs 503, manuals silent).
  # The site generates the DANFSe from the authorized XML; the ADN download stays available only with -FetchDanfse.
  if([string]$Job.status -eq 'Autorizada'){
-  if(-not $FetchDanfse -or -not $Job.needs_danfse -or [string]$Job.access_key -notmatch '^[0-9]{50}$'){throw 'SITE_JOB_DONE'}
+  if(-not $FetchDanfse -or $Environment -ne '2' -or -not $Job.needs_danfse -or [string]$Job.access_key -notmatch '^[0-9]{50}$'){throw 'SITE_JOB_DONE'}
   $danfse=Send-TriadeSiteDanfse -FiscalClient $FiscalClient -SiteClient $SiteClient -Site $Site -Ticket $Ticket -DpsId ([int]$Job.dps_id) -AccessKey ([string]$Job.access_key) -JournalRoot $JournalRoot -Identifier ([string]$Job.identifier)
   return [PSCustomObject]@{state='Autorizada em teste';http_status=200;codes='';message='Somente DANFSe';danfse=$(if($null -eq $danfse){'ok'}else{$danfse})}
  }
  $bytes=Get-TriadeJobBytes -Job $Job
  # Protect-TriadeOfflineDps re-validates XSD, tpAmb=2, prestador emitente and that the certificate CNPJ is the DPS CNPJ.
- $signed=Protect-TriadeOfflineDps -Bytes $bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -OwnCnpj ([string]$Job.summary.cnpj)
- $review=Test-TriadeSignedDps -Bytes $signed -Certificate $Certificate -SchemaDirectory $SchemaDirectory
+ $signed=Protect-TriadeOfflineDps -Bytes $bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -OwnCnpj ([string]$Job.summary.cnpj) -Environment $Environment
+ $review=Test-TriadeSignedDps -Bytes $signed -Certificate $Certificate -SchemaDirectory $SchemaDirectory -Environment $Environment
  if($review.identifier -ne [string]$Job.identifier){throw 'SITE_XML_INTEGRITY'}
  $sha=[Security.Cryptography.SHA256]::Create()
  try{$signedHash=([BitConverter]::ToString($sha.ComputeHash($signed))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
- $result=Invoke-TriadeSingleRestrictedDps -Bytes $signed -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $JournalRoot -Client $FiscalClient -ConfirmRestrictedSend
+ $result=Invoke-TriadeSingleRestrictedDps -Bytes $signed -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $JournalRoot -Client $FiscalClient -ConfirmRestrictedSend -Environment $Environment
  $null=Send-TriadeSiteResult -Client $SiteClient -Site $Site -Ticket $Ticket -DpsId ([int]$Job.dps_id) -Result $result -SignedSha256 $signedHash -JournalRoot $JournalRoot -Identifier $review.identifier
  if($FetchDanfse -and $result.state -eq 'Autorizada em teste'){
   $outcome=Get-TriadeJournalOutcome -JournalRoot $JournalRoot -Identifier $review.identifier
@@ -169,4 +180,4 @@ function Get-TriadeProtocolCommand {
  return (Get-ItemProperty -Path $key).'(default)'
 }
 
-Export-ModuleMember -Function Send-TriadeSiteDanfse,Get-TriadeAllowedSites,Resolve-TriadeLaunchUrl,New-TriadeSiteClient,Get-TriadeSiteJobs,Get-TriadeJobBytes,Send-TriadeSiteResult,Invoke-TriadeSiteJob,Register-TriadeProtocol,Get-TriadeProtocolCommand
+Export-ModuleMember -Function Get-TriadeJobEnvironment,Send-TriadeSiteDanfse,Get-TriadeAllowedSites,Resolve-TriadeLaunchUrl,New-TriadeSiteClient,Get-TriadeSiteJobs,Get-TriadeJobBytes,Send-TriadeSiteResult,Invoke-TriadeSiteJob,Register-TriadeProtocol,Get-TriadeProtocolCommand

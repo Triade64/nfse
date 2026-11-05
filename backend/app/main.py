@@ -35,7 +35,7 @@ from .danfse import build_danfse
 from lxml import etree
 from .nbs import nbs_table, format_nbs
 from .tomador import normalize_address, complete_address, address_required
-from .dps_preview import PreviewOptions, ReserveOptions, FiscalProfile, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, SERIES_PATTERN, BRASILIA
+from .dps_preview import PreviewOptions, ReserveOptions, FiscalProfile, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, PRODUCTION_SCHEMA_DIR, SERIES_PATTERN, BRASILIA, RESTRICTED, PRODUCTION, ENVIRONMENT_NAMES
 from argon2.exceptions import VerificationError, InvalidHashError
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
@@ -148,7 +148,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.9.4',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.10.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -183,15 +183,18 @@ def download_local_connector(u=Depends(current_user)):
     role(u,['admin'])
     package=ROOT/'local_connector'
     names=['Abrir_Conector.cmd','Ativar_Abertura_pelo_Site.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','TriadeRestricted.psm1','TriadeSite.psm1','LEIA-ME.txt']
-    if any(not (package/name).is_file() for name in names) or len(list(SCHEMA_DIR.glob('*.xsd')))!=10:
+    if any(not (package/name).is_file() for name in names) or len(list(SCHEMA_DIR.glob('*.xsd')))!=10 or len(list(PRODUCTION_SCHEMA_DIR.glob('*.xsd')))!=10:
         raise HTTPException(503,'Pacote do conector ainda não disponível neste deployment.')
     output=io.BytesIO()
     with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
         for name in names:archive.writestr('Triade_Conector_Local/'+name,(package/name).read_bytes())
+        # schemas/ = produção restrita (layout 20/10/2026); schemas/producao/ = produção (layout 09/02/2026).
         for path in sorted(SCHEMA_DIR.glob('*.xsd')):
             archive.writestr('Triade_Conector_Local/schemas/'+path.name,path.read_bytes())
+        for path in sorted(PRODUCTION_SCHEMA_DIR.glob('*.xsd')):
+            archive.writestr('Triade_Conector_Local/schemas/producao/'+path.name,path.read_bytes())
     output.seek(0)
-    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_9_2.zip"'})
+    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_10_0.zip"'})
 
 @app.post('/api/drafts/{id}/restricted-preview')
 def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Depends(db_session)):
@@ -210,7 +213,11 @@ def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Dep
     return {'xml':xml.decode('utf-8'),'sha256':digest,'environment':2,'submitted':False,'number_reserved':False,
             'warning':'Prévia offline validada no XSD. Numeração não reservada. Regras fiscais e aceitação da assinatura na API pendentes.'}
 
-RESTRICTED_ENV='2'
+RESTRICTED_ENV=RESTRICTED
+
+def company_environment(c):
+    """Emission environment of a company: '2' (produção restrita, default) or '1' (produção). Only an admin changes it."""
+    return PRODUCTION if (c.config or {}).get('ambiente')==PRODUCTION else RESTRICTED
 
 def batch_has_dps(db,batch_id):
     return db.scalar(select(DPS.id).join(Draft,DPS.draft_id==Draft.id).where(Draft.batch_id==batch_id).limit(1)) is not None
@@ -227,6 +234,7 @@ class SeriesInput(BaseModel):
     next_number:int=Field(ge=1,le=999999999999999)
     expected_revision:int|None=None
     confirm_unused:Literal[True]
+    environment:Literal['1','2']='2'
 
 @app.get('/api/companies/{id}/dps-series')
 def list_series(id:int,u=Depends(current_user),db=Depends(db_session)):
@@ -239,17 +247,18 @@ def save_series(id:int,data:SeriesInput,u=Depends(current_user),db=Depends(db_se
     role(u,['admin'])
     if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
     c=get_or_404(db,Company,id);series=normalize_series(data.series)
-    query=select(DpsSeries).where(DpsSeries.company_id==id,DpsSeries.environment==RESTRICTED_ENV,DpsSeries.series==series)
+    env=data.environment
+    query=select(DpsSeries).where(DpsSeries.company_id==id,DpsSeries.environment==env,DpsSeries.series==series)
     if not URL.startswith('sqlite'):query=query.with_for_update()
     s=db.scalar(query)
     if (s.revision if s else None)!=data.expected_revision:raise HTTPException(409,'Série alterada por outra operação. Recarregue.')
-    used=db.scalar(select(func.max(DPS.number)).where(DPS.company_id==id,DPS.environment==RESTRICTED_ENV,DPS.series==series)) or 0
+    used=db.scalar(select(func.max(DPS.number)).where(DPS.company_id==id,DPS.environment==env,DPS.series==series)) or 0
     if data.next_number<=used:raise HTTPException(409,f'O próximo número deve ser maior que {used}, já reservado nesta série.')
     if s and data.next_number<s.next_number:raise HTTPException(409,'A numeração não pode retroceder. Números já liberados nunca são reutilizados.')
     previous=s.next_number if s else None
-    if not s:s=DpsSeries(company_id=c.id,environment=RESTRICTED_ENV,series=series,next_number=data.next_number);db.add(s)
+    if not s:s=DpsSeries(company_id=c.id,environment=env,series=series,next_number=data.next_number);db.add(s)
     else:s.next_number=data.next_number;s.revision+=1
-    db.flush();audit(db,u,'save_dps_series','company',c.id,{'series':series,'environment':RESTRICTED_ENV,'previous_next_number':previous,'next_number':data.next_number})
+    db.flush();audit(db,u,'save_dps_series','company',c.id,{'series':series,'environment':env,'previous_next_number':previous,'next_number':data.next_number})
     db.commit();return serialize(s)
 
 @app.post('/api/drafts/{id}/dps')
@@ -261,7 +270,7 @@ def reserve_dps(id:int,data:ReserveOptions,u=Depends(current_user),db=Depends(db
     b=get_or_404(db,Batch,d.batch_id);batch_access(db,u,b)
     return reserve_core(db,u,d,b,data)
 
-def reserve_core(db,u,d,b,data):
+def reserve_core(db,u,d,b,data,production_confirmed=False):
     """Caller holds the transaction lock on the draft (SQLite BEGIN IMMEDIATE / PostgreSQL FOR UPDATE)."""
     existing=db.scalar(select(DPS).where(DPS.draft_id==d.id,active_dps()))
     if existing:return {**dps_public(existing),'existing':True}
@@ -270,22 +279,26 @@ def reserve_core(db,u,d,b,data):
     if d.errors or not d.fingerprint or not d.company_id:raise HTTPException(422,'Valide o rascunho sem inconsistências antes de reservar a numeração.')
     c=get_or_404(db,Company,d.company_id);allowed_company(db,u,c.id)
     if c.revision!=d.company_revision:raise HTTPException(409,'Cadastro da empresa alterado após a validação. Revalide o lote.')
-    series=normalize_series(data.series)
-    query=select(DpsSeries).where(DpsSeries.company_id==c.id,DpsSeries.environment==RESTRICTED_ENV,DpsSeries.series==series)
+    env=company_environment(c)
+    # A real (legally valid) note is only reserved through the Notas screen, after the reinforced confirmation.
+    if env==PRODUCTION and not production_confirmed:raise HTTPException(409,'Empresa em produção: emita pela tela Notas, confirmando que é uma nota real.')
+    try:series=normalize_series(data.series)
+    except ValueError as exc:raise HTTPException(422,str(exc)+' Ajuste a série no perfil fiscal da empresa.') from None
+    query=select(DpsSeries).where(DpsSeries.company_id==c.id,DpsSeries.environment==env,DpsSeries.series==series)
     if not URL.startswith('sqlite'):query=query.with_for_update()
     s=db.scalar(query)
-    if not s:raise HTTPException(409,'Série sem numeração configurada para esta empresa. Configure o próximo número antes de reservar.')
+    if not s:raise HTTPException(409,f'Série {series} sem numeração configurada em {ENVIRONMENT_NAMES[env]} para esta empresa. Configure o próximo número antes de reservar.')
     number=str(s.next_number)
     issued_at=datetime.now(timezone.utc).replace(microsecond=0)-timedelta(minutes=1)
-    try:xml=build_dps(d.raw,serialize(c),data,data.own_company_cnpj,series,number,issued_at,'Triade-Web-0.8',tomador_address(db,c.id,d.raw.get('documento_tomador')))
+    try:xml=build_dps(d.raw,serialize(c),data,data.own_company_cnpj,series,number,issued_at,'Triade-Web-0.10',tomador_address(db,c.id,d.raw.get('documento_tomador')),environment=env)
     except ValueError as exc:raise HTTPException(422,str(exc)) from None
     digest=hashlib.sha256(xml).hexdigest()
     municipality=str(c.config.get('municipio_ibge',''))
-    x=DPS(draft_id=d.id,environment=RESTRICTED_ENV,identifier=dps_identifier(municipality,c.cnpj,series,number),xml_sha256=digest,
+    x=DPS(draft_id=d.id,environment=env,identifier=dps_identifier(municipality,c.cnpj,series,number),xml_sha256=digest,
           company_id=c.id,series=series,number=s.next_number,status='Reservada',issued_at=issued_at.astimezone(BRASILIA).isoformat(),xml=xml.decode('utf-8'),created_by=u.id)
     s.next_number+=1;s.revision+=1
     db.add(x);db.flush()
-    audit(db,u,'reserve_dps','draft',d.id,{'dps_id':x.id,'series':series,'number':s.next_number-1,'environment':RESTRICTED_ENV,'xml_sha256':digest,'batch_revision':b.revision})
+    audit(db,u,'reserve_dps','draft',d.id,{'dps_id':x.id,'series':series,'number':s.next_number-1,'environment':env,'xml_sha256':digest,'batch_revision':b.revision})
     db.commit()
     return {**dps_public(x),'existing':False}
 
@@ -406,6 +419,7 @@ class EmitInput(BaseModel):
     expected_raw:dict[str,str]
     confirm:Literal[True]
     simples_percent:Decimal|None=Field(default=None,ge=0,le=100,decimal_places=2)
+    confirm_production:bool=False
 
 @app.get('/api/companies/{id}/fiscal-defaults')
 def fiscal_defaults(id:int,u=Depends(current_user),db=Depends(db_session)):
@@ -419,7 +433,7 @@ def fiscal_defaults(id:int,u=Depends(current_user),db=Depends(db_session)):
 
 @app.post('/api/notes/{id}/emit')
 def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_session)):
-    """Reserves the DPS with the company's fiscal profile. Still restricted environment only; signing/sending stays in the connector."""
+    """Reserves the DPS with the company's fiscal profile, in the company's environment. Signing/sending stays in the connector."""
     role(u,['admin'])
     if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
     d=get_or_404(db,Draft,id,locked=True)
@@ -430,6 +444,8 @@ def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_sessio
     if not profile:raise HTTPException(422,'Configure o perfil fiscal da empresa (Empresas → Editar) antes de emitir.')
     if b.revision!=data.batch_revision or d.raw!=data.expected_raw:raise HTTPException(409,'Nota alterada. Recarregue a lista antes de emitir.')
     has_active=db.scalar(select(DPS.id).where(DPS.draft_id==d.id,active_dps())) is not None
+    if company_environment(c)==PRODUCTION and not data.confirm_production and not has_active:
+        raise HTTPException(422,'Empresa em PRODUÇÃO: confirme que esta é uma NOTA REAL, com validade jurídica, antes de emitir.')
     if not has_active and c.revision!=d.company_revision and not batch_has_dps(db,b.id):
         # Company data changed since validation (e.g. fiscal profile edited): revalidate this single note first.
         validate_batch(db,u,b);db.flush()
@@ -439,11 +455,13 @@ def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_sessio
     except ValueError as exc:
         message=exc.errors()[0]['msg'] if hasattr(exc,'errors') else str(exc)
         raise HTTPException(422,message.removeprefix('Value error, ')+' Revise o perfil fiscal da empresa se necessário.') from None
-    return reserve_core(db,u,d,b,options)
+    return reserve_core(db,u,d,b,options,production_confirmed=data.confirm_production)
 
 # ---- Local connector integration (0.9.0): the site hands work to the PC through a one-time triade-nfse:// link.
 TICKET_MINUTES=15
-CONNECTOR_STATES={'Autorizada em teste':'Autorizada','Rejeitada em teste':'Rejeitada','Situação desconhecida; consultar':'Desconhecida'}
+CONNECTOR_STATES={'Autorizada em teste':'Autorizada','Rejeitada em teste':'Rejeitada','Autorizada em produção':'Autorizada','Rejeitada em produção':'Rejeitada','Situação desconhecida; consultar':'Desconhecida'}
+# A result label names its environment; it must match the environment of the DPS it reports on.
+STATE_ENVIRONMENT={'Autorizada em teste':RESTRICTED,'Rejeitada em teste':RESTRICTED,'Autorizada em produção':PRODUCTION,'Rejeitada em produção':PRODUCTION}
 
 class TicketInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -478,7 +496,7 @@ def connector_ticket(request:Request,db):
     return t
 
 def job_public(x,d):
-    return {'dps_id':x.id,'identifier':x.identifier,'series':x.series,'number':x.number,'status':x.status,'xml':x.xml,'xml_sha256':x.xml_sha256,
+    return {'dps_id':x.id,'identifier':x.identifier,'environment':x.environment,'series':x.series,'number':x.number,'status':x.status,'xml':x.xml,'xml_sha256':x.xml_sha256,
             'access_key':x.access_key,'needs_danfse':False,
             'summary':{'cnpj':d.raw.get('cnpj_emitente'),'tomador':d.raw.get('nome_tomador'),'competencia':d.raw.get('competencia'),'valor':d.raw.get('valor_servico')}}
 
@@ -493,7 +511,7 @@ def connector_jobs(request:Request,db=Depends(db_session)):
 
 class ConnectorResult(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    state:Literal['Autorizada em teste','Rejeitada em teste','Situação desconhecida; consultar']
+    state:Literal['Autorizada em teste','Rejeitada em teste','Autorizada em produção','Rejeitada em produção','Situação desconhecida; consultar']
     http_status:int=Field(ge=0,le=599)
     codes:str=Field(default='',max_length=200)
     message:str=Field(default='',max_length=400)
@@ -508,13 +526,14 @@ def connector_result(dps_id:int,data:ConnectorResult,request:Request,db=Depends(
     if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
     x=get_or_404(db,DPS,dps_id,locked=True)
     new=CONNECTOR_STATES[data.state]
+    if STATE_ENVIRONMENT.get(data.state,x.environment)!=x.environment:raise HTTPException(409,'O resultado informado é de outro ambiente.')
     if x.status=='Autorizada':
         if new=='Autorizada' and data.access_key==x.access_key:return dps_public(x)
         raise HTTPException(409,'DPS já autorizada; o resultado não pode ser alterado.')
     if x.status not in ('Reservada','Desconhecida'):raise HTTPException(409,'Situação atual da DPS não aceita resultado do conector.')
     nfse_xml=None
     if new=='Autorizada':
-        try:nfse_xml=check_authorized_nfse(data.nfse_xml_b64 or '',data.access_key or '',x.xml or '')
+        try:nfse_xml=check_authorized_nfse(data.nfse_xml_b64 or '',data.access_key or '',x.xml or '',x.environment)
         except ValueError as exc:raise HTTPException(422,str(exc)) from None
     x.status=new;x.result={'state':data.state,'http_status':data.http_status,'codes':data.codes,'message':data.message,'signed_sha256':data.signed_sha256}
     x.result_at=now()
@@ -639,11 +658,16 @@ def save_company(data,db,u,c=None):
         try:cfg['perfil_fiscal']=FiscalProfile(**cfg['perfil_fiscal']).model_dump(mode='json')
         except (ValueError,TypeError) as exc:raise HTTPException(422,'Perfil fiscal inválido: '+(exc.errors()[0]['msg'] if hasattr(exc,'errors') else str(exc)).removeprefix('Value error, ')) from None
     else:cfg.pop('perfil_fiscal',None)
+    if cfg.get('ambiente') not in (None,RESTRICTED,PRODUCTION):raise HTTPException(422,'Ambiente de emissão inválido.')
+    if cfg.get('ambiente')==PRODUCTION and not cfg.get('perfil_fiscal'):raise HTTPException(422,'Configure o perfil fiscal antes de colocar a empresa em produção.')
+    previous_env=company_environment(c) if c is not None else RESTRICTED
     if c is None:c=Company(cnpj=doc,name=data.name,config=cfg);db.add(c)
     else:
         if c.cnpj!=doc:raise HTTPException(422,'CNPJ é imutável. Cadastre outra empresa.')
         c.name=data.name;c.config=cfg;c.revision+=1
-    db.flush();audit(db,u,'save','company',c.id);db.commit();return serialize(c)
+    db.flush();audit(db,u,'save','company',c.id)
+    if company_environment(c)!=previous_env:audit(db,u,'change_environment','company',c.id,{'from':previous_env,'to':company_environment(c)})
+    db.commit();return serialize(c)
 @app.post('/api/companies')
 def create_company(data:CompanyInput,u=Depends(current_user),db=Depends(db_session)):
     return save_company(data,db,u)

@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest==8.4.2
+pymupdf==1.24.14
+opencv-python-headless==4.10.0.84

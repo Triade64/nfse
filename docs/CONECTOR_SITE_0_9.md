@@ -120,3 +120,27 @@ Como não há API de DANFSe disponível (veja a verificação acima), o site ger
   - frontend com 22 de 22 aprovados;
   - conector com todas as suítes aprovadas, provando que por padrão não há chamada ao ADN;
   - DANFSe gerado a partir da NFS-e real da DPS nº 9 conferido visualmente.
+
+## Atualização 0.9.3: DANFSe no modelo oficial v2.0
+
+O DANFSe gerado pelo site passa a reproduzir o **DANFSe v2.0 do Portal Nacional**, a partir do PDF oficial que o escritório baixou para a NFS-e nº 5 (DPS nº 7). A geometria (posição, fonte e tamanho de cada texto, linhas e faixas cinza) foi medida nesse PDF.
+
+- **Cabeçalho:**
+  - logo da NFS-e (`backend/app/data/nfse-logo.png`, com transparência, extraído do modelo; é o logo que o portal disponibiliza);
+  - "DANFSe v2.0 / Documento Auxiliar da NFS-e" e, em produção restrita, "NFS-e SEM VALIDADE JURÍDICA" em vermelho;
+  - município, ambiente gerador e tipo de ambiente.
+- **QR code:** desenhado em vetor (`segno`), aponta para a consulta pública: `https://www.producaorestrita.nfse.gov.br/ConsultaPublica?tpc=1&chave=…` em testes, a mesma URL decodificada do QR oficial; `https://www.nfse.gov.br/ConsultaPublica?tpc=1&chave=…` em produção, por analogia (ainda não confirmada).
+- **Blocos, como no oficial:**
+  - identificação: chave, números, datas, emitente, situação e finalidade;
+  - prestador/fornecedor e tomador/adquirente;
+  - destinatário e intermediário;
+  - serviço prestado;
+  - tributação municipal (ISSQN), tributação federal e tributação IBS/CBS;
+  - valor total;
+  - informações complementares, com os totais aproximados da Lei 12.741;
+  - recibo no rodapé.
+- **Textos das opções:** vêm das descrições do XSD oficial (Simples Nacional, regime de apuração, tributação e retenção do ISSQN, emitente, finalidade). Campos ausentes no XML saem como "-", como no oficial. Telefone, e-mail e IM do prestador vêm da DPS, como no oficial.
+- **Limitação:** o nome do município de um tomador de outra cidade só aparece se estiver no XML; se não, sai o código IBGE. Para mostrar o nome, falta incorporar a tabela de municípios (Anexo A).
+- **Comparação:** a mesma NFS-e nº 5 gerada pelo site ficou visualmente igual ao PDF oficial. O QR gerado decodifica para a mesma URL do QR oficial.
+- **Testes:** backend com 88 de 88 aprovados, incluindo o teste do QR (`pymupdf` e `opencv-python-headless` só em `requirements-dev.txt`).
+- **Dependências do site:** `fpdf2==2.8.3` e `segno==1.6.6` (Python puro).

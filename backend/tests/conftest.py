@@ -9,6 +9,9 @@ from app.db import Base,engine
 @pytest.fixture
 def client():
     Base.metadata.drop_all(engine);Base.metadata.create_all(engine)
+    # The login rate limiter is per process; each test starts with a clean window.
+    from app import main as app_main
+    app_main.attempts.clear()
     # Deliberately no lifespan worker: tests deterministically drive the persistent queue.
     c=TestClient(app,headers={'X-Requested-With':'nfse-local'})
     try:

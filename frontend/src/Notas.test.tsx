@@ -36,7 +36,9 @@ it('admin emits a ready note with the company profile and downloads the XML',asy
  const dialog=screen.getByRole('dialog');expect(dialog.textContent).toContain('IM omitida');expect(dialog.textContent).toContain('alíquota omitida');
  const percent=within(dialog).getByLabelText(/Percentual aproximado/) as HTMLInputElement;await waitFor(()=>expect(percent.value).toBe('6.54'));
  fireEvent.change(percent,{target:{value:'7,12'}});
- fireEvent.click(within(dialog).getByRole('checkbox'));fireEvent.submit(within(dialog).getByRole('button',{name:/Reservar e baixar XML/}).closest('form')!);
+ fireEvent.click(within(dialog).getByRole('checkbox',{name:/Conferi emitente/}));
+ fireEvent.click(within(dialog).getByRole('checkbox',{name:/Abrir o conector/}));  // only download the XML in this case
+ fireEvent.submit(within(dialog).getByRole('button',{name:/Reservar e baixar XML/}).closest('form')!);
  await waitFor(()=>expect(screen.getByRole('status').textContent).toContain('série 1, nº 3'));
  expect(api.mock.calls[1]).toEqual(['/companies/1/fiscal-defaults']);
  expect(api.mock.calls[2]).toEqual(['/notes/7/emit','POST',{batch_revision:4,expected_raw:raw,confirm:true,simples_percent:'7.12'}]);
@@ -82,4 +84,33 @@ it('new note offers the official NBS list and the accounting suggestion for 1719
  await waitFor(()=>expect(api).toHaveBeenCalledWith('/batches','POST',expect.anything()));
  const sent=api.mock.calls.find(c=>c[0]==='/batches')![2];
  expect(sent.rows[0].codigo_nbs).toBe('1.1302.21.00');
+});
+
+
+it('emitting with the connector option creates a ticket and opens the triade-nfse link',async()=>{
+ const assign=vi.fn();vi.stubGlobal('location',{...window.location,set href(v:string){assign(v)},get href(){return 'http://localhost/'}});
+ const api=vi.fn().mockResolvedValueOnce([ready]).mockResolvedValueOnce({last_simples_percent:'6.54'}).mockResolvedValueOnce({id:9,identifier:'DPS0003',series:'1',number:3,existing:false}).mockResolvedValueOnce([{...ready,situation:'DPS reservada',editable:false,dps:{id:9,series:'1',number:3,status:'Reservada',identifier:'DPS0003'}}]).mockResolvedValueOnce({url:'triade-nfse://assinar?site=x&ticket=y',expires_at:'',dps_ids:[9]});
+ render(<Notas api={api} companies={companies} customers={[]} services={[]} role="admin"/>);
+ fireEvent.click(await screen.findByRole('button',{name:/Emitir/}));
+ const dialog=screen.getByRole('dialog');await waitFor(()=>expect((within(dialog).getByLabelText(/Percentual aproximado/) as HTMLInputElement).value).toBe('6.54'));
+ expect((within(dialog).getByRole('checkbox',{name:/Abrir o conector/}) as HTMLInputElement).checked).toBe(true);
+ fireEvent.click(within(dialog).getByRole('checkbox',{name:/Conferi emitente/}));
+ fireEvent.submit(within(dialog).getByRole('button',{name:/Reservar/}).closest('form')!);
+ await waitFor(()=>expect(assign).toHaveBeenCalledWith('triade-nfse://assinar?site=x&ticket=y'));
+ expect(api).toHaveBeenCalledWith('/connector/tickets','POST',{dps_ids:[9]});
+ expect(await screen.findByText(/Aguardando o conector para 1 nota/)).toBeTruthy();
+ vi.unstubAllGlobals();
+});
+
+it('shows the authorized key and NFS-e download, and SEFIN codes for a rejection',async()=>{
+ const authorized={...ready,id:20,raw:{...raw,nome_tomador:'AUTORIZADA'},situation:'NFS-e autorizada',editable:false,dps:{id:30,series:'1',number:4,status:'Autorizada',identifier:'DPSX',access_key:'42057042204873094000164000000000000226118757963196'}};
+ const rejected={...ready,id:21,raw:{...raw,nome_tomador:'REJEITADA'},situation:'DPS rejeitada',editable:false,dps:{id:31,series:'1',number:5,status:'Rejeitada',identifier:'DPSY',result:{codes:'E0712'}}};
+ const api=vi.fn().mockResolvedValueOnce([authorized,rejected]);
+ render(<Notas api={api} companies={companies} customers={[]} services={[]} role="admin"/>);
+ await screen.findByText('AUTORIZADA');
+ expect(screen.getByRole('link',{name:/NFS-e/}).getAttribute('href')).toBe('/api/dps/30/nfse.xml');
+ expect(screen.getByText(/Chave …118757963196/)).toBeTruthy();
+ expect(screen.getByText('SEFIN: E0712')).toBeTruthy();
+ expect(screen.queryByRole('button',{name:/Assinar e enviar/})).toBeNull();
+ expect(screen.getAllByRole('button',{name:/Descartar/})).toHaveLength(1);  // only the rejected one
 });

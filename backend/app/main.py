@@ -24,9 +24,11 @@ from sqlalchemy.exc import IntegrityError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import CLOUD,allowed_hosts,allowed_origins
 from .db import Base, engine, Session, ROOT, DATA, URL
-from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access, DPS, DpsSeries, DISCARDED, now
+from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access, DPS, DpsSeries, ConnectorTicket, DISCARDED, now
 from .security import current_user, db_session, hasher, role, allowed_company, company_ids, issue_session
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
+from urllib.parse import urlencode
+from .nfse_result import check_authorized_nfse
 from .nbs import nbs_table, format_nbs
 from .tomador import normalize_address, complete_address, address_required
 from .dps_preview import PreviewOptions, ReserveOptions, FiscalProfile, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, SERIES_PATTERN, BRASILIA
@@ -142,7 +144,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.8.1',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.9.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -176,7 +178,7 @@ class SetupInput(Credentials):
 def download_local_connector(u=Depends(current_user)):
     role(u,['admin'])
     package=ROOT/'local_connector'
-    names=['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','TriadeRestricted.psm1','LEIA-ME.txt']
+    names=['Abrir_Conector.cmd','Ativar_Abertura_pelo_Site.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','TriadeRestricted.psm1','TriadeSite.psm1','LEIA-ME.txt']
     if any(not (package/name).is_file() for name in names) or len(list(SCHEMA_DIR.glob('*.xsd')))!=10:
         raise HTTPException(503,'Pacote do conector ainda não disponível neste deployment.')
     output=io.BytesIO()
@@ -185,7 +187,7 @@ def download_local_connector(u=Depends(current_user)):
         for path in sorted(SCHEMA_DIR.glob('*.xsd')):
             archive.writestr('Triade_Conector_Local/schemas/'+path.name,path.read_bytes())
     output.seek(0)
-    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_8_5.zip"'})
+    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_9_0.zip"'})
 
 @app.post('/api/drafts/{id}/restricted-preview')
 def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Depends(db_session)):
@@ -210,7 +212,7 @@ def batch_has_dps(db,batch_id):
     return db.scalar(select(DPS.id).join(Draft,DPS.draft_id==Draft.id).where(Draft.batch_id==batch_id).limit(1)) is not None
 
 def dps_public(x):
-    data=serialize(x);data.pop('xml',None);return data
+    data=serialize(x);data.pop('xml',None);data.pop('nfse_xml',None);return data
 
 class SeriesInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -303,7 +305,7 @@ def discard_dps(id:int,data:DiscardInput,u=Depends(current_user),db=Depends(db_s
     if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
     x=get_or_404(db,DPS,id,locked=True)
     if x.company_id:allowed_company(db,u,x.company_id)
-    if x.status!='Reservada':raise HTTPException(409,'Somente DPS na situação Reservada pode ser descartada.')
+    if x.status not in ('Reservada','Rejeitada'):raise HTTPException(409,'Somente DPS reservada ou rejeitada pela SEFIN pode ser descartada.')
     x.status=DISCARDED;x.discarded_at=now();x.discarded_by=u.id;x.discard_reason=data.reason.strip()
     audit(db,u,'discard_dps','dps',x.id,{'draft_id':x.draft_id,'series':x.series,'number':x.number,'environment':x.environment,'reason':x.discard_reason})
     db.commit();return dps_public(x)
@@ -320,7 +322,7 @@ def dps_xml(id:int,u=Depends(current_user),db=Depends(db_session)):
 # ---- Notes: one note = one draft in its own single-note batch, so locks and revisions never span unrelated notes.
 
 def note_situation(d,dps):
-    if dps is not None:return 'DPS '+(dps.status or 'Reservada').lower()
+    if dps is not None:return {'Autorizada':'NFS-e autorizada','Rejeitada':'DPS rejeitada','Desconhecida':'DPS em consulta'}.get(dps.status,'DPS '+(dps.status or 'Reservada').lower())
     if d.status in ('Simulado','Na fila','Em processamento','Rejeitado'):return d.status
     if d.errors:return 'Com inconsistência'
     if d.fingerprint:return 'Pronta'
@@ -431,6 +433,92 @@ def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_sessio
         message=exc.errors()[0]['msg'] if hasattr(exc,'errors') else str(exc)
         raise HTTPException(422,message.removeprefix('Value error, ')+' Revise o perfil fiscal da empresa se necessário.') from None
     return reserve_core(db,u,d,b,options)
+
+# ---- Local connector integration (0.9.0): the site hands work to the PC through a one-time triade-nfse:// link.
+TICKET_MINUTES=15
+CONNECTOR_STATES={'Autorizada em teste':'Autorizada','Rejeitada em teste':'Rejeitada','Situação desconhecida; consultar':'Desconhecida'}
+
+class TicketInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    dps_ids:list[int]=Field(min_length=1,max_length=50)
+
+def site_origin(request:Request):
+    host=request.headers.get('host','')
+    return ('https://' if CLOUD else 'http://')+host
+
+@app.post('/api/connector/tickets')
+def create_ticket(data:TicketInput,request:Request,u=Depends(current_user),db=Depends(db_session)):
+    role(u,['admin'])
+    if len(set(data.dps_ids))!=len(data.dps_ids):raise HTTPException(422,'DPS repetida na seleção.')
+    blocked=[]
+    for dps_id in data.dps_ids:
+        x=get_or_404(db,DPS,dps_id)
+        if x.company_id:allowed_company(db,u,x.company_id)
+        if x.status not in ('Reservada','Desconhecida') or not x.xml:blocked.append(f'{x.series}/{x.number} ({x.status})')
+    if blocked:raise HTTPException(409,'Só DPS reservadas ou em consulta podem ir ao conector: '+', '.join(blocked))
+    token=secrets.token_urlsafe(32)
+    expires=(datetime.now(timezone.utc)+timedelta(minutes=TICKET_MINUTES)).isoformat()
+    t=ConnectorTicket(token_hash=hashlib.sha256(token.encode()).hexdigest(),user_id=u.id,dps_ids=data.dps_ids,expires_at=expires)
+    db.add(t);db.flush();audit(db,u,'connector_ticket','connector_ticket',t.id,{'dps_ids':data.dps_ids,'expires_at':expires});db.commit()
+    return {'url':'triade-nfse://assinar?'+urlencode({'site':site_origin(request),'ticket':token}),'expires_at':expires,'dps_ids':data.dps_ids}
+
+def connector_ticket(request:Request,db):
+    header=request.headers.get('authorization','')
+    if not header.startswith('Bearer '):raise HTTPException(401,'Ticket do conector ausente.')
+    t=db.scalar(select(ConnectorTicket).where(ConnectorTicket.token_hash==hashlib.sha256(header[7:].strip().encode()).hexdigest()))
+    if not t or t.revoked or t.expires_at<=datetime.now(timezone.utc).isoformat():raise HTTPException(401,'Ticket do conector inválido ou expirado. Gere um novo pelo site.')
+    return t
+
+def job_public(x,d):
+    return {'dps_id':x.id,'identifier':x.identifier,'series':x.series,'number':x.number,'status':x.status,'xml':x.xml,'xml_sha256':x.xml_sha256,
+            'summary':{'cnpj':d.raw.get('cnpj_emitente'),'tomador':d.raw.get('nome_tomador'),'competencia':d.raw.get('competencia'),'valor':d.raw.get('valor_servico')}}
+
+@app.get('/api/connector/jobs')
+def connector_jobs(request:Request,db=Depends(db_session)):
+    t=connector_ticket(request,db)
+    jobs=[]
+    for dps_id in t.dps_ids:
+        x=db.get(DPS,dps_id)
+        if x is not None:jobs.append(job_public(x,db.get(Draft,x.draft_id)))
+    return {'jobs':jobs,'expires_at':t.expires_at}
+
+class ConnectorResult(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    state:Literal['Autorizada em teste','Rejeitada em teste','Situação desconhecida; consultar']
+    http_status:int=Field(ge=0,le=599)
+    codes:str=Field(default='',max_length=200)
+    message:str=Field(default='',max_length=400)
+    access_key:str|None=Field(default=None,max_length=60)
+    nfse_xml_b64:str|None=Field(default=None,max_length=3_000_000)
+    signed_sha256:str=Field(pattern=r'^[0-9a-f]{64}$')
+
+@app.post('/api/connector/jobs/{dps_id}/result')
+def connector_result(dps_id:int,data:ConnectorResult,request:Request,db=Depends(db_session)):
+    t=connector_ticket(request,db)
+    if dps_id not in t.dps_ids:raise HTTPException(403,'Esta DPS não pertence ao ticket.')
+    if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+    x=get_or_404(db,DPS,dps_id,locked=True)
+    new=CONNECTOR_STATES[data.state]
+    if x.status=='Autorizada':
+        if new=='Autorizada' and data.access_key==x.access_key:return dps_public(x)
+        raise HTTPException(409,'DPS já autorizada; o resultado não pode ser alterado.')
+    if x.status not in ('Reservada','Desconhecida'):raise HTTPException(409,'Situação atual da DPS não aceita resultado do conector.')
+    nfse_xml=None
+    if new=='Autorizada':
+        try:nfse_xml=check_authorized_nfse(data.nfse_xml_b64 or '',data.access_key or '',x.xml or '')
+        except ValueError as exc:raise HTTPException(422,str(exc)) from None
+    x.status=new;x.result={'state':data.state,'http_status':data.http_status,'codes':data.codes,'message':data.message,'signed_sha256':data.signed_sha256}
+    x.result_at=now()
+    if new=='Autorizada':x.access_key=data.access_key;x.nfse_xml=nfse_xml
+    audit(db,db.get(User,t.user_id),'connector_result','dps',x.id,{'status':new,'http_status':data.http_status,'codes':data.codes,'access_key':x.access_key,'ticket_id':t.id})
+    db.commit();return dps_public(x)
+
+@app.get('/api/dps/{id}/nfse.xml')
+def nfse_xml_download(id:int,u=Depends(current_user),db=Depends(db_session)):
+    x=get_or_404(db,DPS,id)
+    if x.company_id:allowed_company(db,u,x.company_id)
+    if not x.nfse_xml:raise HTTPException(404,'NFS-e ainda não registrada para esta DPS.')
+    return Response(x.nfse_xml.encode('utf-8'),media_type='application/xml',headers={'Content-Disposition':f'attachment; filename="NFSe_{x.access_key}.xml"'})
 
 @app.get('/api/nbs')
 def nbs_list(u=Depends(current_user)):
@@ -922,7 +1010,7 @@ if not CLOUD:
 @app.get('/api/health')
 def health():
     import os
-    return {'app_id':'triade-nfse','version':(ROOT/'VERSION').read_text().strip(),'instance':'cloud' if CLOUD else os.getenv('NFSE_INSTANCE','portable'),'local_connector_available':all((ROOT/'local_connector'/name).is_file() for name in ['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','TriadeRestricted.psm1','LEIA-ME.txt'])}
+    return {'app_id':'triade-nfse','version':(ROOT/'VERSION').read_text().strip(),'instance':'cloud' if CLOUD else os.getenv('NFSE_INSTANCE','portable'),'local_connector_available':all((ROOT/'local_connector'/name).is_file() for name in ['Abrir_Conector.cmd','Ativar_Abertura_pelo_Site.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','TriadeRestricted.psm1','TriadeSite.psm1','LEIA-ME.txt'])}
 
 @app.post('/api/batches/{id}/process-simulation')
 def process_simulation(id:int,u=Depends(current_user),db=Depends(db_session)):

@@ -8,9 +8,10 @@ export type Note={id:number;batch_id:number;batch_revision:number;company_id:num
 const money=(c:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((c||0)/100);
 const fmtNbs=(d:string)=>/^\d{9}$/.test(d)?`${d[0]}.${d.slice(1,5)}.${d.slice(5,7)}.${d.slice(7)}`:d;
 const dateBR=(iso:string)=>iso?iso.split('-').reverse().join('/'):'—';
-const tone=(s:string)=>s==='Pronta'?'green':s==='Com inconsistência'?'red':s.startsWith('DPS')?'blue':'orange';
+const tone=(s:string)=>s==='Pronta'||s==='NFS-e autorizada'?'green':s==='Com inconsistência'||s==='DPS rejeitada'?'red':s.startsWith('DPS')?'blue':'orange';
 const blank=():Record<string,string>=>({cnpj_emitente:'',documento_tomador:'',nome_tomador:'',competencia:'',municipio_ibge:'',descricao_servico:'',codigo_tributacao_nacional:'',codigo_tributacao_municipal:'',codigo_nbs:'',valor_servico:'',iss_aliquota:'',iss_retido:'nao',retencoes:'{}',observacoes:''});
-const SITUATIONS=['Pronta','Com inconsistência','Rascunho','DPS reservada'];
+const SITUATIONS=['Pronta','Com inconsistência','Rascunho','DPS reservada','DPS em consulta','NFS-e autorizada','DPS rejeitada'];
+const SENDABLE=['Reservada','Desconhecida'];
 
 function Dialog({title,close,children}:{title:string;close:()=>void;children:React.ReactNode}){
  return <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button className="icon" onClick={close} aria-label="Fechar"><X size={20}/></button></header>{children}</section></div>;
@@ -21,7 +22,8 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
  const [query,setQuery]=useState(''),[company,setCompany]=useState(''),[situation,setSituation]=useState(''),[month,setMonth]=useState('');
  const [checked,setChecked]=useState<number[]>([]);
  const [dup,setDup]=useState<Note[]|null>(null),[dupDate,setDupDate]=useState(''),[dupOk,setDupOk]=useState(false),[requestId,setRequestId]=useState(()=>crypto.randomUUID());
- const [emitting,setEmitting]=useState<Note|null>(null),[emitOk,setEmitOk]=useState(false),[percent,setPercent]=useState('');
+ const [emitting,setEmitting]=useState<Note|null>(null),[emitOk,setEmitOk]=useState(false),[percent,setPercent]=useState(''),[openConnector,setOpenConnector]=useState(true);
+ const [waiting,setWaiting]=useState<number[]>([]),[launchUrl,setLaunchUrl]=useState('');
  const [discarding,setDiscarding]=useState<Note|null>(null),[reason,setReason]=useState(''),[discardOk,setDiscardOk]=useState(false);
  const [editing,setEditing]=useState<{note?:Note;raw:Record<string,string>}|null>(null),[nbs,setNbs]=useState<Data[]>([]);
  useEffect(()=>{if(editing&&!nbs.length)api('/nbs').then(setNbs).catch(()=>{/* the field still accepts a typed code */})},[editing]);
@@ -32,13 +34,18 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
  async function load(){setNotes(await api('/notes'));setLoaded(true)}
  useEffect(()=>{run(load)},[]);
 
+ const pending=notes.filter(n=>n.dps&&waiting.includes(n.dps.id)&&SENDABLE.includes(n.dps.status));
+ useEffect(()=>{if(!waiting.length)return;const started=Date.now();const timer=setInterval(()=>{if(Date.now()-started>15*60*1000){setWaiting([]);return}load().catch(()=>{})},5000);return()=>clearInterval(timer)},[waiting]);
+ useEffect(()=>{if(waiting.length&&notes.length&&!pending.length){const done=notes.filter(n=>n.dps&&waiting.includes(n.dps.id));const ok=done.filter(n=>n.dps!.status==='Autorizada').length;setWaiting([]);setNotice(`Conector concluiu: ${ok} autorizada${ok!==1?'s':''}, ${done.length-ok} com outro resultado. Confira cada linha.`)}},[notes]);
  const visible=useMemo(()=>notes.filter(n=>(!company||String(n.company_id)===company)&&(!situation||n.situation===situation)&&(!month||n.raw.competencia?.startsWith(month))&&(!query||(n.raw.nome_tomador+' '+n.raw.documento_tomador+' '+n.raw.descricao_servico).toLowerCase().includes(query.toLowerCase()))),[notes,company,situation,month,query]);
  const selected=notes.filter(n=>checked.includes(n.id));
 
- async function openEmit(n:Note){setEmitting(n);setEmitOk(false);setPercent('');setNotice('');setError('');if(companyOf(n.company_id)?.config.perfil_fiscal?.op_simp_nac==='3'){try{const d=await api('/companies/'+n.company_id+'/fiscal-defaults');if(d.last_simples_percent)setPercent(d.last_simples_percent)}catch{/* prefill is optional */}}}
+ async function launch(ids:number[]){const t=await api('/connector/tickets','POST',{dps_ids:ids});setWaiting(ids);setLaunchUrl(t.url);window.location.href=t.url}
+ async function sendSelected(list:Note[]){await run(async()=>{const ids=list.filter(n=>n.dps&&SENDABLE.includes(n.dps.status)).map(n=>n.dps!.id);if(!ids.length)throw Error('Nenhuma nota selecionada com DPS reservada ou em consulta.');await launch(ids);setNotice(`Abrindo o conector para ${ids.length} nota${ids.length>1?'s':''}…`)})}
+ async function openEmit(n:Note){setEmitting(n);setEmitOk(false);setOpenConnector(true);setPercent('');setNotice('');setError('');if(companyOf(n.company_id)?.config.perfil_fiscal?.op_simp_nac==='3'){try{const d=await api('/companies/'+n.company_id+'/fiscal-defaults');if(d.last_simples_percent)setPercent(d.last_simples_percent)}catch{/* prefill is optional */}}}
  function openDuplicate(list:Note[]){setDup(list);setDupDate('');setDupOk(false);setRequestId(crypto.randomUUID());setNotice('')}
  async function submitDuplicate(e:FormEvent){e.preventDefault();if(!dup)return;await run(async()=>{const r=await api('/notes/duplicate','POST',{draft_ids:dup.map(n=>n.id),competencia:dupDate,confirm_review:dupOk,request_id:requestId});setDup(null);setChecked([]);await load();setNotice(`${r.created.length} nota${r.created.length>1?'s':''} criada${r.created.length>1?'s':''} para ${dateBR(dupDate)}. Confira e emita.`)})}
- async function submitEmit(e:FormEvent){e.preventDefault();if(!emitting)return;await run(async()=>{const asks=companyOf(emitting.company_id)?.config.perfil_fiscal?.op_simp_nac==='3';const r=await api('/notes/'+emitting.id+'/emit','POST',{batch_revision:emitting.batch_revision,expected_raw:emitting.raw,confirm:emitOk,...(asks?{simples_percent:percent.replace(',','.')}:{})});const a=document.createElement('a');a.href='/api/dps/'+r.id+'/xml';a.download=r.identifier+'.xml';a.click();setEmitting(null);await load();setNotice(`${r.existing?'Esta nota já tinha DPS: ':'DPS reservada: '}série ${r.series}, nº ${r.number}. O XML foi baixado — assine e envie pelo conector.`)})}
+ async function submitEmit(e:FormEvent){e.preventDefault();if(!emitting)return;await run(async()=>{const asks=companyOf(emitting.company_id)?.config.perfil_fiscal?.op_simp_nac==='3';const r=await api('/notes/'+emitting.id+'/emit','POST',{batch_revision:emitting.batch_revision,expected_raw:emitting.raw,confirm:emitOk,...(asks?{simples_percent:percent.replace(',','.')}:{})});setEmitting(null);await load();if(openConnector){await launch([r.id]);setNotice(`${r.existing?'Esta nota já tinha DPS: ':'DPS reservada: '}série ${r.series}, nº ${r.number}. Abrindo o conector para assinar e enviar…`)}else{const a=document.createElement('a');a.href='/api/dps/'+r.id+'/xml';a.download=r.identifier+'.xml';a.click();setNotice(`${r.existing?'Esta nota já tinha DPS: ':'DPS reservada: '}série ${r.series}, nº ${r.number}. O XML foi baixado — assine e envie pelo conector.`)}})}
  async function submitDiscard(e:FormEvent){e.preventDefault();if(!discarding?.dps)return;await run(async()=>{const r=await api('/dps/'+discarding.dps!.id+'/discard','POST',{reason,confirm_not_authorized:discardOk});setDiscarding(null);await load();setNotice(`DPS série ${r.series} nº ${r.number} descartada. A nota pode ser emitida com um novo número.`)})}
  async function submitEdit(e:FormEvent){e.preventDefault();if(!editing)return;await run(async()=>{
   if(editing.note)await api('/drafts/'+editing.note.id,'PUT',{raw:editing.raw,revision:editing.note.batch_revision});
@@ -53,26 +60,26 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
 
  return <section className="card notes">
   <div className="sectionHead"><div><h2>Notas</h2><p>Todas as notas em um só lugar. Duplique as do mês anterior, confira e emita.</p></div>
-   <div className="buttonRow">{canEdit&&checked.length>0&&<button onClick={()=>openDuplicate(selected)}><Copy size={16}/> Duplicar {checked.length} selecionada{checked.length>1?'s':''}</button>}{canEdit&&<button className="primary" onClick={()=>setEditing({raw:{...blank(),cnpj_emitente:companies.length===1?companies[0].cnpj:'',municipio_ibge:companies.length===1?companies[0].config.municipio_ibge||'':''}})}><Plus size={16}/> Nova nota</button>}</div></div>
+   <div className="buttonRow">{isAdmin&&selected.some(n=>n.dps&&SENDABLE.includes(n.dps.status))&&<button onClick={()=>sendSelected(selected)}><Send size={16}/> Assinar e enviar {selected.filter(n=>n.dps&&SENDABLE.includes(n.dps.status)).length}</button>}{canEdit&&checked.length>0&&<button onClick={()=>openDuplicate(selected)}><Copy size={16}/> Duplicar {checked.length} selecionada{checked.length>1?'s':''}</button>}{canEdit&&<button className="primary" onClick={()=>setEditing({raw:{...blank(),cnpj_emitente:companies.length===1?companies[0].cnpj:'',municipio_ibge:companies.length===1?companies[0].config.municipio_ibge||'':''}})}><Plus size={16}/> Nova nota</button>}</div></div>
   <div className="toolbar filters"><Search size={18}/><input aria-label="Buscar notas" placeholder="Tomador, documento ou serviço" value={query} onChange={e=>setQuery(e.target.value)}/>
    <select aria-label="Filtrar empresa" value={company} onChange={e=>setCompany(e.target.value)}><option value="">Todas as empresas</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
    <select aria-label="Filtrar situação" value={situation} onChange={e=>setSituation(e.target.value)}><option value="">Todas as situações</option>{SITUATIONS.map(s=><option key={s}>{s}</option>)}</select>
    <label className="inlineLabel">Competência<input aria-label="Filtrar competência" type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label>
    <button aria-label="Atualizar lista" disabled={busy} onClick={()=>run(load)}><RefreshCw size={16}/></button></div>
-  {notice&&<div className="success" role="status">{notice}</div>}{error&&!dup&&!emitting&&!discarding&&!editing&&<div className="error" role="alert">{error}</div>}
+  {notice&&<div className="success" role="status">{notice}</div>}{pending.length>0&&<div className="warning" role="note">Aguardando o conector para {pending.length} nota{pending.length>1?'s':''}. Se o conector não abriu, instale-o e ative a abertura pelo site em Configurações{launchUrl&&<>, ou <a href={launchUrl}>clique aqui para abrir de novo</a></>}. A lista atualiza sozinha.</div>}{error&&!dup&&!emitting&&!discarding&&!editing&&<div className="error" role="alert">{error}</div>}
   {loaded&&<div className="resultsTotal">{visible.length} nota{visible.length!==1?'s':''} <strong>{money(visible.reduce((s,n)=>s+n.amount_cents,0))}</strong></div>}
   <div className="tableWrap"><table><thead><tr><th><input type="checkbox" aria-label="Selecionar todas as notas visíveis" checked={visible.length>0&&visible.every(n=>checked.includes(n.id))} onChange={e=>setChecked(e.target.checked?visible.map(n=>n.id):[])}/></th><th>Tomador / serviço</th><th>Empresa</th><th>Competência</th><th>Valor</th><th>Situação</th><th>Ações</th></tr></thead>
   <tbody>{visible.map(n=><tr key={n.id}>
    <td><input type="checkbox" aria-label={'Selecionar '+n.raw.nome_tomador} checked={checked.includes(n.id)} onChange={e=>setChecked(prev=>e.target.checked?[...prev,n.id]:prev.filter(id=>id!==n.id))}/></td>
    <td><strong>{n.raw.nome_tomador||'Tomador não informado'}</strong><small>{n.raw.descricao_servico}</small>{n.raw.codigo_nbs&&<small>NBS {fmtNbs(n.raw.codigo_nbs)}</small>}</td>
    <td>{companyOf(n.company_id)?.name||n.raw.cnpj_emitente}</td><td>{dateBR(n.raw.competencia)}</td><td>{money(n.amount_cents)}</td>
-   <td><span className={'badge '+tone(n.situation)}>{n.situation}</span>{n.dps&&<small>Série {n.dps.series} · nº {n.dps.number}</small>}{n.errors.map(s=><small className="rowError" key={s}>{s}</small>)}{n.address_missing&&!n.dps&&<small className="rowError">Tomador com CNPJ sem endereço completo (E0235). Complete em Tomadores antes de emitir.</small>}</td>
+   <td><span className={'badge '+tone(n.situation)}>{n.situation}</span>{n.dps&&<small>Série {n.dps.series} · nº {n.dps.number}</small>}{n.dps?.access_key&&<small title={n.dps.access_key}>Chave …{String(n.dps.access_key).slice(-12)}</small>}{n.dps?.status==='Rejeitada'&&n.dps.result?.codes&&<small className="rowError">SEFIN: {n.dps.result.codes}</small>}{waiting.includes(n.dps?.id)&&n.dps&&SENDABLE.includes(n.dps.status)&&<small>Aguardando o conector…</small>}{n.errors.map(s=><small className="rowError" key={s}>{s}</small>)}{n.address_missing&&!n.dps&&<small className="rowError">Tomador com CNPJ sem endereço completo (E0235). Complete em Tomadores antes de emitir.</small>}</td>
    <td><div className="entryActions">
     {canEdit&&n.editable&&<button className="textBtn" onClick={()=>{setEditing({note:n,raw:{...blank(),...n.raw}});setNotice('')}}><Pencil size={15}/> Editar</button>}
     {canEdit&&<button className="textBtn" onClick={()=>openDuplicate([n])}><Copy size={15}/> Duplicar</button>}
     {isAdmin&&n.situation==='Pronta'&&!n.address_missing&&<button className="textBtn" onClick={()=>openEmit(n)}><Send size={15}/> Emitir</button>}
-    {n.dps&&<a className="textBtn" href={'/api/dps/'+n.dps.id+'/xml'} download={n.dps.identifier+'.xml'}><Download size={15}/> XML</a>}
-    {isAdmin&&n.dps?.status==='Reservada'&&<button className="textBtn" onClick={()=>{setDiscarding(n);setReason('');setDiscardOk(false);setNotice('')}}><Trash2 size={15}/> Descartar</button>}
+    {isAdmin&&n.dps&&SENDABLE.includes(n.dps.status)&&<button className="textBtn" onClick={()=>sendSelected([n])}><Send size={15}/> {n.dps.status==='Desconhecida'?'Consultar no conector':'Assinar e enviar'}</button>}{n.dps?.status==='Autorizada'?<a className="textBtn" href={'/api/dps/'+n.dps.id+'/nfse.xml'}><Download size={15}/> NFS-e</a>:n.dps&&<a className="textBtn" href={'/api/dps/'+n.dps.id+'/xml'} download={n.dps.identifier+'.xml'}><Download size={15}/> XML</a>}
+    {isAdmin&&(n.dps?.status==='Reservada'||n.dps?.status==='Rejeitada')&&<button className="textBtn" onClick={()=>{setDiscarding(n);setReason('');setDiscardOk(false);setNotice('')}}><Trash2 size={15}/> Descartar</button>}
    </div></td></tr>)}</tbody></table></div>
   {!loaded&&!error&&<p className="muted">Carregando notas…</p>}{loaded&&!visible.length&&<p className="muted">{notes.length?'Nenhuma nota neste filtro.':'Nenhuma nota ainda. Use “Nova nota” ou importe uma planilha em Lotes e importação.'}</p>}
 
@@ -91,6 +98,7 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
    {p?.op_simp_nac==='3'&&<label>Percentual aproximado dos tributos do Simples (%)<input required inputMode="decimal" pattern="[0-9]{1,3}([.,][0-9]{1,2})?" value={percent} onChange={e=>setPercent(e.target.value)} placeholder="Alíquota efetiva deste mês, ex.: 6,54"/><small>Obrigatório para ME/EPP (E0712). Use a alíquota efetiva do mês; o campo traz o último percentual usado.</small></label>}
    <div className="warning">Produção restrita (testes). O site reserva o próximo número e baixa o XML; a assinatura e o envio continuam no conector, no PC com o certificado.</div>
    <label className="checkLabel"><input type="checkbox" checked={emitOk} onChange={e=>setEmitOk(e.target.checked)}/>Conferi emitente, tomador, competência e valor. Autorizo reservar o próximo número desta série.</label>
+   <label className="checkLabel"><input type="checkbox" checked={openConnector} onChange={e=>setOpenConnector(e.target.checked)}/>Abrir o conector deste PC para assinar e enviar em seguida (desmarque para só baixar o XML).</label>
    {error&&<div className="error" role="alert">{error}</div>}
    <div className="modalActions"><button type="button" onClick={()=>setEmitting(null)}>Cancelar</button><button className="primary" disabled={busy||!emitOk||!p||(p.op_simp_nac==='3'&&!/^[0-9]{1,3}([.,][0-9]{1,2})?$/.test(percent))}><Send size={16}/> Reservar e baixar XML</button></div></form></Dialog>})()}
 

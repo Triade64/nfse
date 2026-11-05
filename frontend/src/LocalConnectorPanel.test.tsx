@@ -8,5 +8,6 @@ it('offers a local download without file or password collection',()=>{
  expect(screen.getByRole('link',{name:'Baixar conector local (.zip)'}).getAttribute('href')).toBe('/api/local-connector/download');
  expect(container.querySelector('input[type="file"]')).toBeNull();
  expect(container.querySelector('input[type="password"]')).toBeNull();
- expect(container.textContent).toContain('ainda não recebe a fila do site');
+ expect(container.textContent).toContain('Ativar_Abertura_pelo_Site.cmd');
+ expect(container.textContent).toContain('Produção real continua bloqueada');
 });

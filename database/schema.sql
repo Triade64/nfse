@@ -98,8 +98,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.batches (
 	approval_digest VARCHAR(64), 
 	approved_by INTEGER, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(approved_by) REFERENCES nfse_app.users (id), 
-	FOREIGN KEY(owner_id) REFERENCES nfse_app.users (id)
+	FOREIGN KEY(owner_id) REFERENCES nfse_app.users (id), 
+	FOREIGN KEY(approved_by) REFERENCES nfse_app.users (id)
 )
 
 ;
@@ -117,6 +117,34 @@ CREATE POLICY nfse_backend ON nfse_app.batches TO nfse_runtime USING (true) WITH
 CREATE INDEX IF NOT EXISTS idx_batches_owner_id ON nfse_app.batches (owner_id);
 
 CREATE INDEX IF NOT EXISTS idx_batches_approved_by ON nfse_app.batches (approved_by);
+
+
+CREATE TABLE IF NOT EXISTS nfse_app.connector_tickets (
+	id SERIAL NOT NULL, 
+	token_hash VARCHAR(64) NOT NULL, 
+	user_id INTEGER NOT NULL, 
+	dps_ids JSON NOT NULL, 
+	created_at VARCHAR(40) NOT NULL, 
+	expires_at VARCHAR(40) NOT NULL, 
+	revoked BOOLEAN NOT NULL, 
+	PRIMARY KEY (id), 
+	UNIQUE (token_hash), 
+	FOREIGN KEY(user_id) REFERENCES nfse_app.users (id)
+)
+
+;
+
+ALTER TABLE nfse_app.connector_tickets ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON nfse_app.connector_tickets FROM PUBLIC, anon, authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON nfse_app.connector_tickets TO nfse_runtime;
+
+DROP POLICY IF EXISTS nfse_backend ON nfse_app.connector_tickets;
+
+CREATE POLICY nfse_backend ON nfse_app.connector_tickets TO nfse_runtime USING (true) WITH CHECK (true);
+
+CREATE INDEX IF NOT EXISTS idx_connector_tickets_user_id ON nfse_app.connector_tickets (user_id);
 
 
 CREATE TABLE IF NOT EXISTS nfse_app.customers (
@@ -259,8 +287,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.drafts (
 	snapshot JSON NOT NULL, 
 	PRIMARY KEY (id), 
 	UNIQUE (fingerprint), 
-	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
-	FOREIGN KEY(batch_id) REFERENCES nfse_app.batches (id)
+	FOREIGN KEY(batch_id) REFERENCES nfse_app.batches (id), 
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
 )
 
 ;
@@ -298,13 +326,17 @@ CREATE TABLE IF NOT EXISTS nfse_app.dps (
 	discarded_at VARCHAR(40), 
 	discarded_by INTEGER, 
 	discard_reason VARCHAR(500), 
+	access_key VARCHAR(60), 
+	nfse_xml TEXT, 
+	result JSON, 
+	result_at VARCHAR(40), 
 	PRIMARY KEY (id), 
 	UNIQUE (identifier), 
-	FOREIGN KEY(created_by) REFERENCES nfse_app.users (id), 
 	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
+	CONSTRAINT uq_dps_number UNIQUE (company_id, environment, series, number), 
 	FOREIGN KEY(draft_id) REFERENCES nfse_app.drafts (id), 
 	FOREIGN KEY(discarded_by) REFERENCES nfse_app.users (id), 
-	CONSTRAINT uq_dps_number UNIQUE (company_id, environment, series, number)
+	FOREIGN KEY(created_by) REFERENCES nfse_app.users (id)
 )
 
 ;

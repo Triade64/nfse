@@ -110,6 +110,21 @@ class DPS(Base):
     discarded_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
     discarded_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
     discard_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Columns added in 0.9.0: result reported by the local connector (signing and submission happen on the PC).
+    access_key: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    nfse_xml: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    result_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+class ConnectorTicket(Base):
+    """Short-lived, single-purpose credential carried by the triade-nfse:// link. Only its SHA-256 is stored."""
+    __tablename__ = 'connector_tickets'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    dps_ids: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[str] = mapped_column(String(40), default=now)
+    expires_at: Mapped[str] = mapped_column(String(40))
+    revoked: Mapped[bool] = mapped_column(default=False)
 class NFSe(Base):
     __tablename__ = 'nfse'
     id: Mapped[int] = mapped_column(primary_key=True)

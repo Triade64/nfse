@@ -1,4 +1,4 @@
-# Tríade NFS-e — versão web 0.5.0
+# Tríade NFS-e — versão web 0.6.0
 
 Preparação e repetição de notas para os mesmos tomadores, com nova competência e conferência humana. React/TypeScript e FastAPI na Vercel; PostgreSQL no Supabase. Nenhuma nota fiscal real é emitida: o processamento disponível é uma simulação.
 
@@ -41,7 +41,7 @@ npm run build --prefix frontend
 .\.venv\Scripts\python scripts/prepare_static.py
 ```
 
-Veja [docs/VALIDACAO.md](docs/VALIDACAO.md) para resultados e limites. A implantação efetiva na Vercel e a conexão com o projeto Supabase ainda precisam ser verificadas.
+Veja [docs/VALIDACAO.md](docs/VALIDACAO.md) para resultados e limites. Numeração central de DPS: [docs/NUMERACAO_0_6.md](docs/NUMERACAO_0_6.md). A implantação efetiva na Vercel e a conexão com o projeto Supabase ainda precisam ser verificadas.
 
 ## Organização
 

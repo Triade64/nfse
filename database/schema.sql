@@ -145,6 +145,33 @@ CREATE POLICY nfse_backend ON nfse_app.customers TO nfse_runtime USING (true) WI
 CREATE INDEX IF NOT EXISTS idx_customers_company_id ON nfse_app.customers (company_id);
 
 
+CREATE TABLE IF NOT EXISTS nfse_app.dps_series (
+	id SERIAL NOT NULL, 
+	company_id INTEGER NOT NULL, 
+	environment VARCHAR(1) NOT NULL, 
+	series VARCHAR(5) NOT NULL, 
+	next_number BIGINT NOT NULL, 
+	revision INTEGER NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
+	UNIQUE (company_id, environment, series)
+)
+
+;
+
+ALTER TABLE nfse_app.dps_series ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON nfse_app.dps_series FROM PUBLIC, anon, authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON nfse_app.dps_series TO nfse_runtime;
+
+DROP POLICY IF EXISTS nfse_backend ON nfse_app.dps_series;
+
+CREATE POLICY nfse_backend ON nfse_app.dps_series TO nfse_runtime USING (true) WITH CHECK (true);
+
+CREATE INDEX IF NOT EXISTS idx_dps_series_company_id ON nfse_app.dps_series (company_id);
+
+
 CREATE TABLE IF NOT EXISTS nfse_app.services (
 	id SERIAL NOT NULL, 
 	company_id INTEGER NOT NULL, 
@@ -197,8 +224,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.user_companies (
 	user_id INTEGER NOT NULL, 
 	company_id INTEGER NOT NULL, 
 	PRIMARY KEY (user_id, company_id), 
-	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
-	FOREIGN KEY(user_id) REFERENCES nfse_app.users (id)
+	FOREIGN KEY(user_id) REFERENCES nfse_app.users (id), 
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
 )
 
 ;
@@ -260,10 +287,21 @@ CREATE TABLE IF NOT EXISTS nfse_app.dps (
 	identifier VARCHAR(80) NOT NULL, 
 	xml_path VARCHAR, 
 	xml_sha256 VARCHAR(64), 
+	company_id INTEGER, 
+	series VARCHAR(5), 
+	number BIGINT, 
+	status VARCHAR(40), 
+	issued_at VARCHAR(40), 
+	xml TEXT, 
+	created_at VARCHAR(40), 
+	created_by INTEGER, 
 	PRIMARY KEY (id), 
 	UNIQUE (draft_id), 
 	UNIQUE (identifier), 
-	FOREIGN KEY(draft_id) REFERENCES nfse_app.drafts (id)
+	FOREIGN KEY(draft_id) REFERENCES nfse_app.drafts (id), 
+	CONSTRAINT uq_dps_number UNIQUE (company_id, environment, series, number), 
+	FOREIGN KEY(created_by) REFERENCES nfse_app.users (id), 
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
 )
 
 ;
@@ -279,6 +317,10 @@ DROP POLICY IF EXISTS nfse_backend ON nfse_app.dps;
 CREATE POLICY nfse_backend ON nfse_app.dps TO nfse_runtime USING (true) WITH CHECK (true);
 
 CREATE INDEX IF NOT EXISTS idx_dps_draft_id ON nfse_app.dps (draft_id);
+
+CREATE INDEX IF NOT EXISTS idx_dps_company_id ON nfse_app.dps (company_id);
+
+CREATE INDEX IF NOT EXISTS idx_dps_created_by ON nfse_app.dps (created_by);
 
 
 CREATE TABLE IF NOT EXISTS nfse_app.jobs (

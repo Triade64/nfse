@@ -72,7 +72,7 @@ try{
  $successNfs=$Success.Replace('"idDps":"'+$identifier+'"','"idDps":"NFS'+$Key+'"')
  $pdfText='%PDF-1.7 DANFSE FICTICIO'
  $fiscal=New-Fiscal 'ok' @(404,201,200) @('',$successNfs,$pdfText);$clients+=$fiscal.client
- $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket -FetchDanfse
  if($result.state -ne 'Autorizada em teste'){throw ('Fluxo pelo site nao autorizou: '+($result|ConvertTo-Json -Compress))}
  if(@($fiscal.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 1){throw 'Envio fiscal nao foi unico.'}
  $posted=$fakeSite.Posted[0]|ConvertFrom-Json
@@ -86,43 +86,48 @@ try{
  # DANFSe unavailable: the NFS-e stays authorized and the site receives only the failure code.
  $fakeSite.Posted.Clear()
  $fiscal=New-Fiscal 'danfse-404' @(404,201,404) @('',$successNfs,'');$clients+=$fiscal.client
- $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket -FetchDanfse
  if($result.state -ne 'Autorizada em teste' -or $result.danfse -ne 'DANFSE_HTTP_404' -or ($fakeSite.Posted[1]|ConvertFrom-Json).error_code -ne 'DANFSE_HTTP_404'){throw 'Falha do DANFSe alterou o resultado fiscal ou nao foi informada.'}
  # Not a PDF: refused locally, never forwarded as a DANFSe.
  $fakeSite.Posted.Clear()
  $fiscal=New-Fiscal 'danfse-html' @(404,201,200) @('',$successNfs,'<html>login</html>');$clients+=$fiscal.client
- $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket -FetchDanfse
  if(($fakeSite.Posted[1]|ConvertFrom-Json).error_code -ne 'DANFSE_FORMAT'){throw 'Resposta que nao e PDF foi aceita como DANFSe.'}
  # Authorized job that only lacks the PDF: no signature and no SEFIN call, only the ADN.
  $fakeSite.Posted.Clear()
  $only=New-Job;$only.status='Autorizada';$only|Add-Member -NotePropertyName needs_danfse -NotePropertyValue $true;$only|Add-Member -NotePropertyName access_key -NotePropertyValue $Key
  $fiscal=New-Fiscal 'so-danfse' @(200) @($pdfText);$clients+=$fiscal.client
- $result=Invoke-TriadeSiteJob -Job $only -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ $result=Invoke-TriadeSiteJob -Job $only -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket -FetchDanfse
  if($result.danfse -ne 'ok' -or @($fiscal.handler.Calls|Where-Object{$_ -match 'sefin'}).Count -ne 0 -or @($fakeSite.Posted).Count -ne 1){throw 'Job so de DANFSe assinou ou chamou a SEFIN.'}
 
+ # 0.9.2 default: no DANFSe API call (the site generates the PDF).
+ $fakeSite.Posted.Clear()
+ $fiscal=New-Fiscal 'sem-adn' @(404,201) @('',$successNfs);$clients+=$fiscal.client
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ if($result.state -ne 'Autorizada em teste' -or @($fiscal.handler.Calls|Where-Object{$_ -match 'adn\.'}).Count -ne 0 -or @($fakeSite.Posted).Count -ne 1){throw 'Sem -FetchDanfse o conector ainda chamou o ADN.'}
  # 4) Rejection is reported with its code and never resent.
  $fakeSite.Posted.Clear()
  $fiscal=New-Fiscal 'rejeicao' @(404,400) @('',$Rejected);$clients+=$fiscal.client
- $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket -FetchDanfse
  $posted=$fakeSite.Posted[0]|ConvertFrom-Json
  if($posted.state -ne 'Rejeitada em teste' -or $posted.codes -ne 'TESTE_REJEICAO' -or $posted.PSObject.Properties['access_key']){throw 'Rejeicao nao devolvida ao site.'}
 
  # 5) Timeout after POST: reported as unknown; a later link only consults (HEAD/GET) and reports the authorization.
  $fakeSite.Posted.Clear()
  $fiscal=New-Fiscal 'timeout' @(404,200,200,200,200) @('','',$Found,$successNfs,'%PDF-1.7 X');$clients+=$fiscal.client;$fiscal.handler.TimeoutOnPost=$true
- $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket -FetchDanfse
  if(($fakeSite.Posted[0]|ConvertFrom-Json).state -ne 'Situação desconhecida; consultar'){throw 'Timeout nao devolvido como situacao desconhecida.'}
  $fiscal.handler.TimeoutOnPost=$false
- $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket -FetchDanfse
  if($result.state -ne 'Autorizada em teste' -or @($fiscal.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 1 -or ($fakeSite.Posted[1]|ConvertFrom-Json).access_key -ne $Key){throw ('Consulta posterior nao recuperou sem reenvio. '+($result|ConvertTo-Json -Compress -Depth 4)+' calls='+($fiscal.handler.Calls -join ';')+' posted='+($fakeSite.Posted -join ' || '))}
 
  # 5b) Same recovery with a consultation body built by hand (real API field order), separate journal.
  $fakeSite.Posted.Clear()
  $hand='{"tipoAmbiente":2,"versaoAplicativo":"SefinNacional_1.6.0","dataHoraProcessamento":"2026-11-05T14:18:59-03:00","idDps":"NFS'+$Key+'","chaveAcesso":"'+$Key+'"}'
  $fiscal=New-Fiscal 'timeout-b' @(404,200,200,200,200) @('','',$hand,$successNfs,'%PDF-1.7 X');$clients+=$fiscal.client;$fiscal.handler.TimeoutOnPost=$true
- $null=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ $null=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket -FetchDanfse
  $fiscal.handler.TimeoutOnPost=$false
- $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket -FetchDanfse
  if($result.state -ne 'Autorizada em teste'){throw ('5b: '+($result|ConvertTo-Json -Compress -Depth 4))}
  # 6) Tampered XML in transit or a DPS of another issuer never reaches the fiscal transport.
  foreach($case in @(@{name='hash';job=(New-Job -Hash ('0'*64))},@{name='cnpj';job=(New-Job -Cnpj '00000000000191')})){

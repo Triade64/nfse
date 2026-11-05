@@ -122,9 +122,11 @@ function Send-TriadeSiteDanfse {
 function Invoke-TriadeSiteJob {
  # One DPS: integrity -> local XSD/CNPJ/certificate checks + signature -> journaled submission -> report to site.
  param($Job,[Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[string]$SchemaDirectory,[string]$JournalRoot,
-       [Net.Http.HttpClient]$FiscalClient,[Net.Http.HttpClient]$SiteClient,[string]$Site,[string]$Ticket)
+       [Net.Http.HttpClient]$FiscalClient,[Net.Http.HttpClient]$SiteClient,[string]$Site,[string]$Ticket,[switch]$FetchDanfse)
+ # 0.9.2: no contributor DANFSe API is published (ADN restricted /danfse -> 404, production docs 503, manuals silent).
+ # The site generates the DANFSe from the authorized XML; the ADN download stays available only with -FetchDanfse.
  if([string]$Job.status -eq 'Autorizada'){
-  if(-not $Job.needs_danfse -or [string]$Job.access_key -notmatch '^[0-9]{50}$'){throw 'SITE_JOB_DONE'}
+  if(-not $FetchDanfse -or -not $Job.needs_danfse -or [string]$Job.access_key -notmatch '^[0-9]{50}$'){throw 'SITE_JOB_DONE'}
   $danfse=Send-TriadeSiteDanfse -FiscalClient $FiscalClient -SiteClient $SiteClient -Site $Site -Ticket $Ticket -DpsId ([int]$Job.dps_id) -AccessKey ([string]$Job.access_key) -JournalRoot $JournalRoot -Identifier ([string]$Job.identifier)
   return [PSCustomObject]@{state='Autorizada em teste';http_status=200;codes='';message='Somente DANFSe';danfse=$(if($null -eq $danfse){'ok'}else{$danfse})}
  }
@@ -137,7 +139,7 @@ function Invoke-TriadeSiteJob {
  try{$signedHash=([BitConverter]::ToString($sha.ComputeHash($signed))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
  $result=Invoke-TriadeSingleRestrictedDps -Bytes $signed -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $JournalRoot -Client $FiscalClient -ConfirmRestrictedSend
  $null=Send-TriadeSiteResult -Client $SiteClient -Site $Site -Ticket $Ticket -DpsId ([int]$Job.dps_id) -Result $result -SignedSha256 $signedHash -JournalRoot $JournalRoot -Identifier $review.identifier
- if($result.state -eq 'Autorizada em teste'){
+ if($FetchDanfse -and $result.state -eq 'Autorizada em teste'){
   $outcome=Get-TriadeJournalOutcome -JournalRoot $JournalRoot -Identifier $review.identifier
   $danfse=Send-TriadeSiteDanfse -FiscalClient $FiscalClient -SiteClient $SiteClient -Site $Site -Ticket $Ticket -DpsId ([int]$Job.dps_id) -AccessKey $outcome.access_key -JournalRoot $JournalRoot -Identifier $review.identifier
   $result|Add-Member -NotePropertyName danfse -NotePropertyValue $(if($null -eq $danfse){'ok'}else{$danfse}) -Force

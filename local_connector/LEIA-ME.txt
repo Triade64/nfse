@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.9.1 - ABERTURA PELO SITE E DANFSE
+TRIADE NFS-e | CONECTOR LOCAL 0.9.2 - ABERTURA PELO SITE
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -103,3 +103,8 @@ VERSAO 0.9.1 - DANFSE OFICIAL
 Depois que a NFS-e e autorizada, o conector baixa o DANFSe oficial (PDF) no Ambiente de Dados Nacional da producao restrita (https://adn.producaorestrita.nfse.gov.br/danfse/<chave>), usando o mesmo certificado do Windows. Confere que o arquivo e um PDF, guarda uma copia como danfse.pdf no historico do PC e envia ao site, onde aparece o botao DANFSe na nota.
 Se o DANFSe nao puder ser obtido, a NFS-e continua autorizada; o site mostra "DANFSe pendente" com o codigo, e o botao Buscar DANFSe abre o conector somente para baixar o PDF (sem assinar nem enviar nada a SEFIN).
 O endereco do DANFSe segue a documentacao do ADN indicada pelo Swagger da SEFIN; o primeiro uso real confirma o contrato.
+
+
+VERSAO 0.9.2 - DANFSE GERADO PELO SITE
+Nao existe hoje API de DANFSe para o contribuinte: no ADN da producao restrita tudo em /danfse responde 404, a documentacao de producao responde 503 e os manuais oficiais do ADN e do Emissor Publico nao descrevem esse servico. Por isso o conector deixa de chamar o ADN apos a autorizacao.
+O DANFSe passa a ser gerado pelo site a partir do XML da NFS-e autorizada (botao DANFSe na tela Notas), com o aviso SEM VALOR FISCAL nas notas de producao restrita. A busca no ADN continua no codigo, desligada, para quando o servico for publicado.

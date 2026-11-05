@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.4 - DIAGNOSTICO
+TRIADE NFS-e | CONECTOR LOCAL 0.5 - DIAGNOSTICO
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -20,3 +20,5 @@ Versao 0.2: o resultado identifica certificado do Windows versus A1 temporario e
 Versao 0.3: carrega explicitamente System.Security, verifica loja vazia antes de abrir o seletor e identifica em qual etapa a selecao falhou. A consulta usa apenas o repositorio Pessoal do usuario atual, em leitura. Se a lista estiver vazia, confira Win+R > certmgr.msc > Pessoal > Certificados. Nao execute como administrador para tentar resolver essa selecao: outro usuario pode ter um repositorio diferente.
 
 Versao 0.4: apos selecionar certificado do Windows, use Salvar OpenAPI para salvar a documentacao de testes em JSON. A leitura segue apenas referencias da pagina oficial, no mesmo host HTTPS de producao restrita, sem executar JavaScript nem seguir redirects. O arquivo salvo nao contem o certificado, chave ou senha; contem o JSON de documentacao, origem e hash. Pode ser compartilhado para implementar a integracao. Nao e uma emissao ou consulta de dados fiscais de clientes.
+
+Versao 0.5: a falha de exportacao mostra um motivo seguro (por exemplo, NO_REFERENCE). Nenhuma mensagem arbitraria de excecao, senha, caminho ou certificado e copiada para o resultado.

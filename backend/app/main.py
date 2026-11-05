@@ -177,7 +177,7 @@ def download_local_connector(u=Depends(current_user)):
     with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
         for name in names:archive.writestr('Triade_Conector_Local/'+name,(package/name).read_bytes())
     output.seek(0)
-    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_4.zip"'})
+    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_5.zip"'})
 
 @app.get('/api/setup')
 def setup_status(db=Depends(db_session)):

@@ -10,7 +10,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeConnector.Core.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.4'
+$form.Text = 'Tríade NFS-e | Conector local 0.5'
 $form.ClientSize = [Drawing.Size]::new(720,650)
 $form.MinimumSize = [Drawing.Size]::new(736,689)
 $form.StartPosition = 'CenterScreen'
@@ -80,7 +80,7 @@ $run.Add_Click({
             $temporary=Import-TriadeLocalA1 -Path $fileBox.Text -Password $secure;$active=$temporary
         }
         $check=Get-TriadeCertificateCheck -Certificate $active
-        $lines=@('Tríade NFS-e | diagnóstico local 0.4',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
+        $lines=@('Tríade NFS-e | diagnóstico local 0.5',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
         if ($null -ne $temporary) { $lines+='Origem: arquivo A1 temporário (chave efêmera).' } else { $lines+='Origem: certificado instalado no Windows.' }
         $lines+=('PowerShell: '+$PSVersionTable.PSVersion.ToString()+' | .NET: '+[Environment]::Version.ToString())
         if ($network.Checked) {
@@ -112,7 +112,8 @@ $saveApi.Add_Click({
         $output.Text=$script:lastSummary;$copy.Enabled=$true
     } catch {
         $failure=Get-TriadeConnectionFailure -Exception $_.Exception
-        $script:lastSummary=@('Não foi possível salvar a documentação OpenAPI. Nenhuma DPS enviada.',('Códigos: '+$failure.codes),('Tipos: '+$failure.types),'Se a conexão já retornou HTTP 200, abra o Swagger no navegador e salve o JSON que ele indica.') -join [Environment]::NewLine
+        $reason=Get-TriadeDocumentationFailure -Exception $_.Exception
+        $script:lastSummary=@('Não foi possível salvar a documentação OpenAPI. Nenhuma DPS enviada.',('Motivo: '+$reason.code),$reason.message,('Códigos: '+$failure.codes),('Tipos: '+$failure.types),'Se a conexão já retornou HTTP 200, abra o Swagger no navegador e salve o JSON que ele indica.') -join [Environment]::NewLine
         $output.Text=$script:lastSummary;$copy.Enabled=$true
     } finally { $dialog.Dispose();$saveApi.Enabled=$true;$run.Enabled=$true;$windowsButton.Enabled=$true;$fileButton.Enabled=$true;$form.UseWaitCursor=$false }
 })

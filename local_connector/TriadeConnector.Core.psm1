@@ -152,6 +152,31 @@ function Read-TriadeDocumentationText {
     }
 }
 
+function Get-TriadeDocumentationFailure {
+    param([Parameter(Mandatory=$true)][Exception]$Exception)
+    # Only exact messages authored by this program are allowed into the report.
+    $reasons=@{
+        'Não foi encontrada uma referência OpenAPI na página. Abra o Swagger no navegador e salve o JSON indicado nele; nenhuma URL foi deduzida.'=@('NO_REFERENCE','A página respondeu, mas o conector não localizou uma referência OpenAPI permitida. Abra o Swagger no navegador para conferir o endereço do JSON.')
+        'A referência foi encontrada, mas o JSON OpenAPI não pôde ser validado ou baixado. Não houve envio de DPS.'=@('CONTRACT_DOWNLOAD_OR_FORMAT','Uma referência foi localizada, mas o documento não pôde ser baixado ou reconhecido como OpenAPI.')
+        'A documentação não retornou HTTP 200. Nenhum redirecionamento foi seguido.'=@('HTTP_STATUS','A documentação não retornou HTTP 200. Redirecionamentos continuam bloqueados.')
+        'A documentação excedeu o limite de 2 MB.'=@('SIZE_LIMIT','O documento ultrapassou o limite de 2 MB.')
+        'O conteúdo recebido não é um contrato OpenAPI reconhecido.'=@('NOT_OPENAPI','O conteúdo recebido não foi reconhecido como OpenAPI.')
+        'Documentação não encontrada.'=@('NO_DOCUMENT','A documentação não foi localizada.')
+    }
+    $current=$Exception
+    for($i=0;$null -ne $current -and $i -lt 8;$i++) {
+        if ($reasons.ContainsKey($current.Message)) {
+            $reason=$reasons[$current.Message]
+            return [PSCustomObject]@{ code=$reason[0]; message=$reason[1] }
+        }
+        if ($current -is [UnauthorizedAccessException] -or $current -is [IO.IOException]) {
+            return [PSCustomObject]@{ code='FILE_ACCESS'; message='Não foi possível acessar o arquivo local. Tente salvar em Documentos.' }
+        }
+        $current=$current.InnerException
+    }
+    return [PSCustomObject]@{ code='UNCLASSIFIED'; message='Falha não classificada. Compartilhe somente os tipos e códigos técnicos do diagnóstico.' }
+}
+
 function Get-TriadeRestrictedOpenApi {
     param([Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
     $null=Get-TriadeCertificateCheck -Certificate $Certificate
@@ -209,4 +234,4 @@ function Invoke-TriadeRestrictedProbe {
     }
 }
 
-Export-ModuleMember -Function Get-TriadeWindowsCertificates,Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe,Get-TriadeConnectionFailure,Resolve-TriadeDocumentationReference,Find-TriadeOpenApiReferences,Get-TriadeRestrictedOpenApi
+Export-ModuleMember -Function Get-TriadeWindowsCertificates,Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe,Get-TriadeConnectionFailure,Resolve-TriadeDocumentationReference,Find-TriadeOpenApiReferences,Get-TriadeRestrictedOpenApi,Get-TriadeDocumentationFailure

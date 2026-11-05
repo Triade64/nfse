@@ -64,6 +64,11 @@ try {
     foreach($reference in @('https://sefin.nfse.gov.br/swagger.json','https://example.com/openapi.json','/API/SefinNacional/nfse/123','/API/SefinNacional/swagger.json?token=ficticio','http://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/swagger.json')) {
         if ($null -ne (Resolve-TriadeDocumentationReference -BaseUri $base -Reference $reference -Kind json)) { throw 'Referencia indevida aceita.' }
     }
+    $noRef=[Exception]::new('Não foi encontrada uma referência OpenAPI na página. Abra o Swagger no navegador e salve o JSON indicado nele; nenhuma URL foi deduzida.')
+    $reason=Get-TriadeDocumentationFailure -Exception ([Exception]::new('SEGREDO-FICTICIO',$noRef))
+    if ($reason.code -ne 'NO_REFERENCE' -or ($reason|ConvertTo-Json) -match 'SEGREDO') { throw 'Mensagem publica de exportacao incorreta.' }
+    $unknown=Get-TriadeDocumentationFailure -Exception ([Exception]::new('SEGREDO-FICTICIO'))
+    if ($unknown.code -ne 'UNCLASSIFIED' -or ($unknown|ConvertTo-Json) -match 'SEGREDO') { throw 'Mensagem interna foi exposta.' }
     & (Join-Path $root 'ConectorTriade.ps1') -SelfTest
     Write-Output 'PASS: parser Windows PowerShell, validade, chave privada, importacao efemera, senha incorreta e handler sem redirects. Sem rede ou certificados reais.'
 } finally {

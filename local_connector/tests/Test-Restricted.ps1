@@ -18,7 +18,7 @@ public sealed class TriadeFakeHttp : HttpMessageHandler {
  public string Marker; public bool TimeoutOnPost; public bool TimeoutOnGet; public bool InvalidUtf8;
  protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
   string method=request.Method.Method;Calls.Add(method+" "+request.RequestUri.AbsoluteUri);
-  if(request.RequestUri.Host!="sefin.producaorestrita.nfse.gov.br" || request.RequestUri.Scheme!="https" || request.RequestUri.Port!=443)throw new Exception("URL_UNSAFE");
+  if((request.RequestUri.Host!="sefin.producaorestrita.nfse.gov.br" && request.RequestUri.Host!="adn.producaorestrita.nfse.gov.br") || request.RequestUri.Scheme!="https" || request.RequestUri.Port!=443)throw new Exception("URL_UNSAFE");
   if((method=="GET" || method=="HEAD") && TimeoutOnGet)throw new TaskCanceledException("SEGREDO-FICTICIO-NAO-COPIAR");
   if(method=="POST"){
    if(!System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(Marker),"\"attempted\"\\s*:\\s*true"))throw new Exception("MARKER_NOT_DURABLE_BEFORE_POST");

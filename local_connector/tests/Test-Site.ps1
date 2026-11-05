@@ -70,13 +70,35 @@ try{
 
  # 3) Happy path with the REAL response shape (idDps = NFS + key): signs, sends once, reports authorization with the NFS-e.
  $successNfs=$Success.Replace('"idDps":"'+$identifier+'"','"idDps":"NFS'+$Key+'"')
- $fiscal=New-Fiscal 'ok' @(404,201) @('',$successNfs);$clients+=$fiscal.client
+ $pdfText='%PDF-1.7 DANFSE FICTICIO'
+ $fiscal=New-Fiscal 'ok' @(404,201,200) @('',$successNfs,$pdfText);$clients+=$fiscal.client
  $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
  if($result.state -ne 'Autorizada em teste'){throw ('Fluxo pelo site nao autorizou: '+($result|ConvertTo-Json -Compress))}
  if(@($fiscal.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 1){throw 'Envio fiscal nao foi unico.'}
  $posted=$fakeSite.Posted[0]|ConvertFrom-Json
- if($fakeSite.Calls[$fakeSite.Calls.Count-1] -ne ('POST /api/connector/jobs/7/result Bearer '+$ticket) -or $posted.state -ne 'Autorizada em teste' -or $posted.access_key -ne $Key -or -not $posted.nfse_xml_b64 -or $posted.signed_sha256 -notmatch '^[0-9a-f]{64}$' -or $posted.http_status -ne 201){throw ('Resultado nao devolvido ao site. Chamadas: '+($fakeSite.Calls -join ' | '))}
+ if($fakeSite.Calls[$fakeSite.Calls.Count-2] -ne ('POST /api/connector/jobs/7/result Bearer '+$ticket) -or $posted.state -ne 'Autorizada em teste' -or $posted.access_key -ne $Key -or -not $posted.nfse_xml_b64 -or $posted.signed_sha256 -notmatch '^[0-9a-f]{64}$' -or $posted.http_status -ne 201){throw ('Resultado nao devolvido ao site. Chamadas: '+($fakeSite.Calls -join ' | '))}
  $nfse=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($posted.nfse_xml_b64));if($nfse -notmatch ('NFS'+$Key)){throw 'XML da NFS-e nao devolvido.'}
+ $adn=@($fiscal.handler.Calls|Where-Object{$_ -match 'adn\.producaorestrita'})
+ if($adn.Count -ne 1 -or $adn[0] -ne ('GET https://adn.producaorestrita.nfse.gov.br/danfse/'+$Key)){throw ('DANFSe nao buscado no ADN: '+($fiscal.handler.Calls -join ' | '))}
+ $sentPdf=$fakeSite.Posted[1]|ConvertFrom-Json
+ if($fakeSite.Calls[$fakeSite.Calls.Count-1] -ne ('POST /api/connector/jobs/7/danfse Bearer '+$ticket) -or [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String($sentPdf.pdf_b64)) -ne $pdfText -or $result.danfse -ne 'ok'){throw 'DANFSe nao entregue ao site.'}
+ if(-not [IO.File]::Exists((Join-Path (Join-Path $fiscal.journal $identifier) 'danfse.pdf'))){throw 'DANFSe nao guardado no historico do PC.'}
+ # DANFSe unavailable: the NFS-e stays authorized and the site receives only the failure code.
+ $fakeSite.Posted.Clear()
+ $fiscal=New-Fiscal 'danfse-404' @(404,201,404) @('',$successNfs,'');$clients+=$fiscal.client
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ if($result.state -ne 'Autorizada em teste' -or $result.danfse -ne 'DANFSE_HTTP_404' -or ($fakeSite.Posted[1]|ConvertFrom-Json).error_code -ne 'DANFSE_HTTP_404'){throw 'Falha do DANFSe alterou o resultado fiscal ou nao foi informada.'}
+ # Not a PDF: refused locally, never forwarded as a DANFSe.
+ $fakeSite.Posted.Clear()
+ $fiscal=New-Fiscal 'danfse-html' @(404,201,200) @('',$successNfs,'<html>login</html>');$clients+=$fiscal.client
+ $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ if(($fakeSite.Posted[1]|ConvertFrom-Json).error_code -ne 'DANFSE_FORMAT'){throw 'Resposta que nao e PDF foi aceita como DANFSe.'}
+ # Authorized job that only lacks the PDF: no signature and no SEFIN call, only the ADN.
+ $fakeSite.Posted.Clear()
+ $only=New-Job;$only.status='Autorizada';$only|Add-Member -NotePropertyName needs_danfse -NotePropertyValue $true;$only|Add-Member -NotePropertyName access_key -NotePropertyValue $Key
+ $fiscal=New-Fiscal 'so-danfse' @(200) @($pdfText);$clients+=$fiscal.client
+ $result=Invoke-TriadeSiteJob -Job $only -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
+ if($result.danfse -ne 'ok' -or @($fiscal.handler.Calls|Where-Object{$_ -match 'sefin'}).Count -ne 0 -or @($fakeSite.Posted).Count -ne 1){throw 'Job so de DANFSe assinou ou chamou a SEFIN.'}
 
  # 4) Rejection is reported with its code and never resent.
  $fakeSite.Posted.Clear()
@@ -87,7 +109,7 @@ try{
 
  # 5) Timeout after POST: reported as unknown; a later link only consults (HEAD/GET) and reports the authorization.
  $fakeSite.Posted.Clear()
- $fiscal=New-Fiscal 'timeout' @(404,200,200,200) @('','',$Found,$successNfs);$clients+=$fiscal.client;$fiscal.handler.TimeoutOnPost=$true
+ $fiscal=New-Fiscal 'timeout' @(404,200,200,200,200) @('','',$Found,$successNfs,'%PDF-1.7 X');$clients+=$fiscal.client;$fiscal.handler.TimeoutOnPost=$true
  $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
  if(($fakeSite.Posted[0]|ConvertFrom-Json).state -ne 'Situação desconhecida; consultar'){throw 'Timeout nao devolvido como situacao desconhecida.'}
  $fiscal.handler.TimeoutOnPost=$false
@@ -97,7 +119,7 @@ try{
  # 5b) Same recovery with a consultation body built by hand (real API field order), separate journal.
  $fakeSite.Posted.Clear()
  $hand='{"tipoAmbiente":2,"versaoAplicativo":"SefinNacional_1.6.0","dataHoraProcessamento":"2026-11-05T14:18:59-03:00","idDps":"NFS'+$Key+'","chaveAcesso":"'+$Key+'"}'
- $fiscal=New-Fiscal 'timeout-b' @(404,200,200,200) @('','',$hand,$successNfs);$clients+=$fiscal.client;$fiscal.handler.TimeoutOnPost=$true
+ $fiscal=New-Fiscal 'timeout-b' @(404,200,200,200,200) @('','',$hand,$successNfs,'%PDF-1.7 X');$clients+=$fiscal.client;$fiscal.handler.TimeoutOnPost=$true
  $null=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
  $fiscal.handler.TimeoutOnPost=$false
  $result=Invoke-TriadeSiteJob -Job $jobs[0] -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $fiscal.journal -FiscalClient $fiscal.client -SiteClient $siteClient -Site $site -Ticket $ticket
@@ -114,4 +136,5 @@ try{
  $code='';try{$null=Send-TriadeSiteResult -Client $expiredClient -Site $site -Ticket $ticket -DpsId 7 -Result ([PSCustomObject]@{state='Rejeitada em teste';http_status=400;codes='X';message=''}) -SignedSha256 ('a'*64) -JournalRoot $Directory -Identifier $identifier}catch{$code=$_.Exception.Message}
  if($code -ne 'SITE_TICKET_EXPIRED'){throw ('Ticket expirado nao identificado: '+$code)}
 }finally{foreach($c in $clients){$c.Dispose()}}
+Write-Output 'PASS: 0.9.1 DANFSe oficial buscado no ADN apos autorizacao (e em job so de DANFSe, sem assinar nem chamar a SEFIN), guardado no PC e entregue ao site; falha ou resposta nao-PDF nao alteram a autorizacao.'
 Write-Output 'PASS: 0.9.0 link triade-nfse (lista de sites exata, ticket, parametros), busca com ticket, assinatura e envio unico, autorizacao/rejeicao/situacao desconhecida devolvidas ao site, consulta posterior sem reenvio, XML adulterado e emitente diverso bloqueados. Transporte ficticio.'

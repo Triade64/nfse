@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, ForeignKey, Integer, JSON, UniqueConstraint, Text, BigInteger, Index, text
+from sqlalchemy import String, ForeignKey, Integer, JSON, UniqueConstraint, Text, BigInteger, Index, text, LargeBinary
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -115,6 +115,10 @@ class DPS(Base):
     nfse_xml: Mapped[str | None] = mapped_column(Text, nullable=True)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     result_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Columns added in 0.9.1: official DANFSe (PDF from the ADN) fetched by the connector with the certificate.
+    danfse_pdf: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    danfse_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    danfse_error: Mapped[str | None] = mapped_column(String(60), nullable=True)
 class ConnectorTicket(Base):
     """Short-lived, single-purpose credential carried by the triade-nfse:// link. Only its SHA-256 is stored."""
     __tablename__ = 'connector_tickets'

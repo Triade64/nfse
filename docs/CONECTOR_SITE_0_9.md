@@ -62,3 +62,26 @@ Aplicar no Supabase **antes** do merge.
 - **Ponta a ponta local:** site real (uvicorn) e funções reais do conector por HTTP, com certificado sintético e só a SEFIN simulada. Uma DPS foi autorizada (o site mostrou "NFS-e autorizada" com a chave, e o download da NFS-e funcionou), outra foi rejeitada com E0712 (o site mostrou "DPS rejeitada"). O mesmo link foi recusado com a lista oficial de sites. Esse teste **encontrou e corrigiu** um erro em que a janela do conector descartaria todas as notas (a lista vinha "embrulhada" no pipeline do PowerShell).
 
 Não testado: o registro do protocolo no Windows e a abertura pelo navegador, que dependem de rodar `Ativar_Abertura_pelo_Site.cmd` no PC; e o envio real à SEFIN por esse fluxo.
+
+## Atualização 0.9.1: DANFSe oficial
+
+- **Conector:** depois da autorização (inclusive quando a autorização é recuperada por consulta), `Get-TriadeDanfse` busca o PDF em `https://adn.producaorestrita.nfse.gov.br/danfse/{chaveAcesso}`:
+  - endereço fixo, certificado do Windows no TLS, sem redirecionamento, limite de 8 MB;
+  - exige HTTP 200 e conteúdo que comece com `%PDF-`;
+  - guarda `danfse.pdf` no histórico do PC e envia ao site (`POST /api/connector/jobs/{id}/danfse`).
+- **Falhas:** HTTP diferente de 200, resposta que não é PDF ou falha de rede são enviadas ao site **só como código** (por exemplo `DANFSE_HTTP_404`). A NFS-e continua autorizada.
+- **Só o DANFSe:** uma DPS **Autorizada sem DANFSe** pode receber um ticket só para baixar o PDF ("Buscar DANFSe"). O conector não assina e não chama a SEFIN, só o ADN.
+- **Site:**
+  - guarda o PDF (`dps.danfse_pdf`, migração aditiva `0004_danfse.sql`);
+  - serve o download em `GET /api/dps/{id}/danfse.pdf`;
+  - aceita só PDF de até 5 MB;
+  - uma falha posterior nunca apaga um PDF já guardado.
+- **Notas:** botões **DANFSe** e **XML NFS-e**; para autorizada sem PDF, **Buscar DANFSe** e o aviso "DANFSe pendente (código)".
+
+**Atenção:** o caminho `/danfse/{chave}` segue a documentação do ADN indicada pelo Swagger da SEFIN (`/DANFSe` → 501 "movido"), mas essa documentação só abre com o certificado e **ainda não foi confirmada com uma chamada real**. Se a chamada real retornar outro código, o site mostra "DANFSe pendente (DANFSE_HTTP_xxx)", e ajustamos o endereço.
+
+**Testes:**
+- backend com 84 de 84 aprovados (recebimento e validação do PDF, código de falha, PDF preservado, ticket só de DANFSe, permissões);
+- frontend com 22 de 22 aprovados;
+- conector com todas as suítes aprovadas (DANFSe após autorização e após consulta, 404, resposta não-PDF, job só de DANFSe sem assinatura e sem SEFIN);
+- ponta a ponta local: autorização seguida do DANFSe, com o site servindo `application/pdf`.

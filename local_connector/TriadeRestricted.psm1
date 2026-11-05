@@ -90,6 +90,28 @@ function Invoke-TriadeFiscalHttp {
   throw
  }finally{if($null -ne $stream){$stream.Dispose()};if($null -ne $response){$response.Dispose()};$memory.Dispose();$cancel.Dispose();$Request.Dispose()}
 }
+function Get-TriadeDanfse {
+ # Official DANFSe (PDF) from the ADN of the restricted environment. Fixed host, no redirects (handler), 8 MB cap.
+ # Moved from SEFIN to ADN per the SEFIN Swagger (/DANFSe -> 501). Returns the PDF bytes or throws a safe code.
+ param([Parameter(Mandatory=$true)][Net.Http.HttpClient]$Client,[Parameter(Mandatory=$true)][string]$AccessKey)
+ if($AccessKey -notmatch '^[0-9]{50}$'){throw 'ACCESS_KEY'}
+ $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get,('https://adn.producaorestrita.nfse.gov.br/danfse/'+$AccessKey))
+ $request.Headers.Accept.ParseAdd('application/pdf')
+ $cancel=[Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(45));$response=$null;$stream=$null;$memory=[IO.MemoryStream]::new()
+ try{
+  $response=$Client.SendAsync($request,[Net.Http.HttpCompletionOption]::ResponseHeadersRead,$cancel.Token).GetAwaiter().GetResult()
+  if([int]$response.StatusCode -ne 200){throw ('DANFSE_HTTP_'+[int]$response.StatusCode)}
+  if($response.Content.Headers.ContentLength -gt 8388608){throw 'DANFSE_SIZE'}
+  $stream=$response.Content.ReadAsStreamAsync().GetAwaiter().GetResult();$buffer=[byte[]]::new(8192)
+  while(($count=$stream.ReadAsync($buffer,0,$buffer.Length,$cancel.Token).GetAwaiter().GetResult()) -gt 0){
+   if($memory.Length+$count -gt 8388608){throw 'DANFSE_SIZE'}
+   $memory.Write($buffer,0,$count)
+  }
+  $bytes=$memory.ToArray()
+  if($bytes.Length -lt 5 -or [Text.Encoding]::ASCII.GetString($bytes,0,5) -ne '%PDF-'){throw 'DANFSE_FORMAT'}
+  return ,$bytes
+ }finally{if($null -ne $stream){$stream.Dispose()};if($null -ne $response){$response.Dispose()};$memory.Dispose();$cancel.Dispose();$request.Dispose()}
+}
 function Read-TriadeFiscalJson {
  param($Response)
  if([string]::IsNullOrWhiteSpace($Response.text)){throw 'RESPONSE_FORMAT'}
@@ -310,4 +332,4 @@ function Invoke-TriadeSingleRestrictedDps {
   return $result
  }finally{if($null -ne $lock){$lock.Dispose()}}
 }
-Export-ModuleMember -Function ConvertTo-TriadeDpsEnvelope,ConvertFrom-TriadeXmlEnvelope,New-TriadeFiscalRequest,Invoke-TriadeSingleRestrictedDps
+Export-ModuleMember -Function ConvertTo-TriadeDpsEnvelope,ConvertFrom-TriadeXmlEnvelope,New-TriadeFiscalRequest,Invoke-TriadeSingleRestrictedDps,Get-TriadeDanfse

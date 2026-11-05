@@ -112,3 +112,42 @@ def test_unknown_result_keeps_dps_open_for_a_later_consultation(admin,company,ro
     assert admin.post(f'/api/dps/{ids[0]}/discard',json={'reason':'nao pode','confirm_not_authorized':True}).status_code==409
     token2,_=ticket(admin,ids);h2=as_connector(admin,token2)  # a new ticket to consult again is allowed
     r=result(admin,h2,ids[0],access_key=KEY,nfse_xml_b64=nfse_for(stored_xml(ids[0])));assert r.json()['status']=='Autorizada'
+
+PDF=b'%PDF-1.7\n%ficticio\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n'
+
+def danfse(client,headers,dps_id,**body):
+    return client.post(f'/api/connector/jobs/{dps_id}/danfse',headers=headers,json=body)
+
+def test_danfse_is_received_from_connector_and_downloaded_on_the_site(admin,company,row):
+    ids=setup_reserved(admin,company,row)
+    token,_=ticket(admin,ids);h=as_connector(admin,token)
+    assert danfse(admin,h,ids[0],pdf_b64=base64.b64encode(PDF).decode()).status_code==409  # not authorized yet
+    result(admin,h,ids[0],access_key=KEY,nfse_xml_b64=nfse_for(stored_xml(ids[0])))
+    assert danfse(admin,h,ids[0],pdf_b64=base64.b64encode(b'<html>nao e pdf</html>').decode()).status_code==422
+    assert danfse(admin,h,ids[0],pdf_b64='***').status_code==422
+    assert danfse(admin,h,ids[0]).status_code==422  # neither PDF nor error
+    r=danfse(admin,h,ids[0],error_code='DANFSE_HTTP_404');assert r.status_code==200 and r.json()['danfse_error']=='DANFSE_HTTP_404' and not r.json()['has_danfse']
+    r=danfse(admin,h,ids[0],pdf_b64=base64.b64encode(PDF).decode());assert r.status_code==200 and r.json()['has_danfse'] and r.json()['danfse_error'] is None
+    assert 'danfse_pdf' not in r.json()
+    assert danfse(admin,h,ids[0],error_code='DANFSE_HTTP_500').json()['has_danfse']  # a later failure never erases a stored PDF
+    admin.post('/api/login',json={'username':'administrador','password':'Senha-ficticia-123!'})
+    d=admin.get(f'/api/dps/{ids[0]}/danfse.pdf');assert d.status_code==200 and d.content==PDF and d.headers['content-type']=='application/pdf'
+    note=next(n for n in admin.get('/api/notes').json() if n['dps'] and n['dps']['id']==ids[0]);assert note['dps']['has_danfse']
+
+def test_authorized_without_danfse_can_get_a_ticket_only_to_fetch_it(admin,company,row):
+    ids=setup_reserved(admin,company,row)
+    token,_=ticket(admin,ids);h=as_connector(admin,token)
+    result(admin,h,ids[0],access_key=KEY,nfse_xml_b64=nfse_for(stored_xml(ids[0])))
+    admin.post('/api/login',json={'username':'administrador','password':'Senha-ficticia-123!'})
+    token2,_=ticket(admin,ids);h2=as_connector(admin,token2)
+    job=admin.get('/api/connector/jobs',headers=h2).json()['jobs'][0]
+    assert job['status']=='Autorizada' and job['needs_danfse'] and job['access_key']==KEY
+    danfse(admin,h2,ids[0],pdf_b64=base64.b64encode(PDF).decode())
+    admin.post('/api/login',json={'username':'administrador','password':'Senha-ficticia-123!'})
+    r=admin.post('/api/connector/tickets',json={'dps_ids':ids});assert r.status_code==409  # nothing left to do
+    assert admin.get(f'/api/dps/{ids[0]}/danfse.pdf').status_code==200
+
+def test_danfse_download_requires_session_and_company_access(admin,company,row):
+    ids=setup_reserved(admin,company,row)
+    admin.post('/api/logout')
+    assert admin.get(f'/api/dps/{ids[0]}/danfse.pdf').status_code==401

@@ -76,7 +76,7 @@ function Get-TriadeDpsReview {
  return [PSCustomObject]@{cnpj=$cnpj.InnerText;identifier=$info.GetAttribute('Id');competence=$info.SelectSingleNode('n:dCompet',$ns).InnerText;amount=$info.SelectSingleNode('n:valores/n:vServPrest/n:vServ',$ns).InnerText;recipient=$info.SelectSingleNode('n:toma/n:xNome',$ns).InnerText}
 }
 
-function Sign-TriadeOfflineDps {
+function Protect-TriadeOfflineDps {
  param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory,[Parameter(Mandatory=$true)][string]$OwnCnpj)
  $null=Get-TriadeCertificateCheck -Certificate $Certificate
  $document=Read-TriadeDps -Bytes $Bytes -SchemaDirectory $SchemaDirectory
@@ -107,4 +107,28 @@ function Sign-TriadeOfflineDps {
   return ,$result
  } finally {if($null -ne $key){$key.Dispose()}}
 }
-Export-ModuleMember -Function Read-TriadeDps,Get-TriadeDpsReview,Sign-TriadeOfflineDps
+
+function Test-TriadeSignedDps {
+ param([Parameter(Mandatory=$true)][byte[]]$Bytes,[Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[Parameter(Mandatory=$true)][string]$SchemaDirectory)
+ $null=Get-TriadeCertificateCheck -Certificate $Certificate
+ $document=Read-TriadeDps -Bytes $Bytes -SchemaDirectory $SchemaDirectory
+ $review=Get-TriadeDpsReview -Document $document
+ $certCnpj=$null
+ foreach($extension in $Certificate.Extensions){if($extension.Oid.Value -eq '2.5.29.17'){$certCnpj=[TriadeOffline.Cnpj]::FromSan($extension.RawData)}}
+ if($certCnpj -ne $review.cnpj){throw 'CERT_CNPJ_MISMATCH'}
+ $ns=[Xml.XmlNamespaceManager]::new($document.NameTable);$ns.AddNamespace('n','http://www.sped.fazenda.gov.br/nfse');$ns.AddNamespace('ds','http://www.w3.org/2000/09/xmldsig#')
+ $signatures=$document.SelectNodes('/n:DPS/ds:Signature',$ns)
+ if($signatures.Count -ne 1 -or $document.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#').Count -ne 1){throw 'SIGNATURE_REQUIRED'}
+ $signature=$signatures[0]
+ $reference=$signature.SelectNodes('ds:SignedInfo/ds:Reference',$ns)
+ if($reference.Count -ne 1 -or $reference[0].GetAttribute('URI') -ne ('#'+$review.identifier)){throw 'SIGNATURE_PROFILE'}
+ $transforms=$reference[0].SelectNodes('ds:Transforms/ds:Transform',$ns)
+ if($transforms.Count -ne 2 -or $transforms[0].GetAttribute('Algorithm') -ne [Security.Cryptography.Xml.SignedXml]::XmlDsigEnvelopedSignatureTransformUrl -or $transforms[1].GetAttribute('Algorithm') -ne [Security.Cryptography.Xml.SignedXml]::XmlDsigC14NTransformUrl){throw 'SIGNATURE_PROFILE'}
+ if($signature.SelectSingleNode('ds:SignedInfo/ds:CanonicalizationMethod',$ns).GetAttribute('Algorithm') -ne [Security.Cryptography.Xml.SignedXml]::XmlDsigC14NTransformUrl -or $signature.SelectSingleNode('ds:SignedInfo/ds:SignatureMethod',$ns).GetAttribute('Algorithm') -ne [Security.Cryptography.Xml.SignedXml]::XmlDsigRSASHA1Url -or $reference[0].SelectSingleNode('ds:DigestMethod',$ns).GetAttribute('Algorithm') -ne [Security.Cryptography.Xml.SignedXml]::XmlDsigSHA1Url){throw 'SIGNATURE_PROFILE'}
+ $publicCerts=$signature.SelectNodes('ds:KeyInfo/ds:X509Data/ds:X509Certificate',$ns)
+ if($publicCerts.Count -ne 1 -or $publicCerts[0].InnerText -ne [Convert]::ToBase64String($Certificate.RawData)){throw 'SIGNATURE_CERTIFICATE'}
+ $verifier=[Security.Cryptography.Xml.SignedXml]::new($document);$verifier.LoadXml($signature)
+ if(-not $verifier.CheckSignature($Certificate,$true)){throw 'SIGNATURE_CHECK_FAILED'}
+ return $review
+}
+Export-ModuleMember -Function Read-TriadeDps,Get-TriadeDpsReview,Protect-TriadeOfflineDps,Test-TriadeSignedDps

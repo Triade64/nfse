@@ -2,7 +2,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
-foreach($name in @('ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1')) {
+foreach($name in @('ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','TriadeRestricted.psm1','tests/Test-Restricted.ps1')) {
     $tokens=$null;$errors=$null
     $null=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root $name),[ref]$tokens,[ref]$errors)
     if ($errors.Count -ne 0) { throw ('Falha no parser PowerShell: '+$name) }
@@ -82,7 +82,7 @@ try {
     } finally { $apiRequest.Dispose() }
     $schemaDirectory=Join-Path (Split-Path -Parent $root) 'schemas/restricted-20261020'
     $unsigned=[IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'dps-ficticia.xml'))
-    $signedBytes=Sign-TriadeOfflineDps -Bytes $unsigned -Certificate $cert -SchemaDirectory $schemaDirectory -OwnCnpj '11222333000181'
+    $signedBytes=Protect-TriadeOfflineDps -Bytes $unsigned -Certificate $cert -SchemaDirectory $schemaDirectory -OwnCnpj '11222333000181'
     $signedXml=Read-TriadeDps -Bytes $signedBytes -SchemaDirectory $schemaDirectory
     $verifier=[Security.Cryptography.Xml.SignedXml]::new($signedXml)
     $verifier.LoadXml($signedXml.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#')[0])
@@ -93,15 +93,16 @@ try {
     $tampered.LoadXml($signedXml.GetElementsByTagName('Signature','http://www.w3.org/2000/09/xmldsig#')[0])
     if($tampered.CheckSignature($cert,$true)){throw 'Alteracao de valor nao detectada.'}
     foreach($cnpj in @('00000000000000','11222333000182')){
-        $blocked=$false;try{$null=Sign-TriadeOfflineDps -Bytes $unsigned -Certificate $cert -SchemaDirectory $schemaDirectory -OwnCnpj $cnpj}catch{$blocked=$true}
+        $blocked=$false;try{$null=Protect-TriadeOfflineDps -Bytes $unsigned -Certificate $cert -SchemaDirectory $schemaDirectory -OwnCnpj $cnpj}catch{$blocked=$true}
         if(-not $blocked){throw 'Divergencia de emitente nao bloqueada.'}
     }
     foreach($text in @(([Text.Encoding]::UTF8.GetString($unsigned)).Replace('<tpAmb>2</tpAmb>','<tpAmb>1</tpAmb>'), '<!DOCTYPE DPS [<!ENTITY bad SYSTEM "file:///secret">]><DPS>&bad;</DPS>')){
         $blocked=$false;try{$null=Read-TriadeDps -Bytes ([Text.Encoding]::UTF8.GetBytes($text)) -SchemaDirectory $schemaDirectory}catch{$blocked=$true}
         if(-not $blocked){throw 'XML de producao ou DTD nao bloqueado.'}
     }
-    $blocked=$false;try{$null=Sign-TriadeOfflineDps -Bytes $signedBytes -Certificate $cert -SchemaDirectory $schemaDirectory -OwnCnpj '11222333000181'}catch{$blocked=$true}
+    $blocked=$false;try{$null=Protect-TriadeOfflineDps -Bytes $signedBytes -Certificate $cert -SchemaDirectory $schemaDirectory -OwnCnpj '11222333000181'}catch{$blocked=$true}
     if(-not $blocked){throw 'Segunda assinatura nao bloqueada.'}
+    & (Join-Path $PSScriptRoot 'Test-Restricted.ps1') -Certificate $cert -SignedBytes $signedBytes -SchemaDirectory $schemaDirectory -Directory $directory
     & (Join-Path $root 'ConectorTriade.ps1') -SelfTest
     Write-Output 'PASS: XSD restrito, XMLDSIG, integridade, bloqueio de CNPJ divergente, producao, DTD e segunda assinatura. Sem rede.'
     Write-Output 'PASS: parser Windows PowerShell, validade, chave privada, importacao efemera, senha incorreta e handler sem redirects. Sem rede ou certificados reais.'

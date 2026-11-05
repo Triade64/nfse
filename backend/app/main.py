@@ -171,7 +171,7 @@ class SetupInput(Credentials):
 def download_local_connector(u=Depends(current_user)):
     role(u,['admin'])
     package=ROOT/'local_connector'
-    names=['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','LEIA-ME.txt']
+    names=['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','TriadeRestricted.psm1','LEIA-ME.txt']
     if any(not (package/name).is_file() for name in names) or len(list(SCHEMA_DIR.glob('*.xsd')))!=10:
         raise HTTPException(503,'Pacote do conector ainda não disponível neste deployment.')
     output=io.BytesIO()
@@ -180,7 +180,7 @@ def download_local_connector(u=Depends(current_user)):
         for path in sorted(SCHEMA_DIR.glob('*.xsd')):
             archive.writestr('Triade_Conector_Local/schemas/'+path.name,path.read_bytes())
     output.seek(0)
-    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_7.zip"'})
+    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_8.zip"'})
 
 @app.post('/api/drafts/{id}/restricted-preview')
 def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Depends(db_session)):
@@ -671,7 +671,7 @@ if not CLOUD:
 @app.get('/api/health')
 def health():
     import os
-    return {'app_id':'triade-nfse','version':(ROOT/'VERSION').read_text().strip(),'instance':'cloud' if CLOUD else os.getenv('NFSE_INSTANCE','portable'),'local_connector_available':all((ROOT/'local_connector'/name).is_file() for name in ['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','LEIA-ME.txt'])}
+    return {'app_id':'triade-nfse','version':(ROOT/'VERSION').read_text().strip(),'instance':'cloud' if CLOUD else os.getenv('NFSE_INSTANCE','portable'),'local_connector_available':all((ROOT/'local_connector'/name).is_file() for name in ['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','TriadeRestricted.psm1','LEIA-ME.txt'])}
 
 @app.post('/api/batches/{id}/process-simulation')
 def process_simulation(id:int,u=Depends(current_user),db=Depends(db_session)):

@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.7 - PREPARACAO OFFLINE
+TRIADE NFS-e | CONECTOR LOCAL 0.8 - TESTE UNITARIO CONTROLADO
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -11,7 +11,7 @@ Requer Windows 10/11 atualizado, Windows PowerShell 5.1 e .NET Framework 4.7.2 o
 
 O conector nao faz upload do arquivo, da senha ou da chave privada. Na autenticacao TLS, o certificado PUBLICO e as provas criptograficas sao apresentados ao servidor do governo. O A1 temporario usa EphemeralKeySet, sem instalar a chave; algumas combinacoes de Schannel/.NET nao aceitam essa chave para TLS. Nesse caso, selecione um certificado que ja esteja instalado no Windows. Nao ha fallback para persistir ou exportar a chave.
 
-Nao ha servidor HTTP local, pareamento com o site, emissao, cancelamento ou atualizacao automatica nesta versao. O resultado e copiado manualmente. Nao sao validados cadeia ICP-Brasil, revogacao, procuracao ou credenciamento. HTTP 200 da documentacao nao confirma autorizacao fiscal. Certificados A3/token nao foram homologados.
+Nao ha servidor HTTP local, pareamento com o site, emissao em producao real, cancelamento ou atualizacao automatica nesta versao. O resultado e copiado manualmente. Nao sao validados cadeia ICP-Brasil, revogacao, procuracao ou credenciamento. HTTP 200 da documentacao nao confirma autorizacao fiscal. Certificados A3/token nao foram homologados.
 
 O certificado original continua onde voce o guardou. Feche o programa ao terminar. Nenhum log de certificado, senha ou nome do titular e gravado pelo conector. O Windows e o ambiente local continuam responsaveis pela seguranca da memoria, arquivos e certificados ja instalados.
 
@@ -26,7 +26,7 @@ Versao 0.5: a falha de exportacao mostra um motivo seguro (por exemplo, NO_REFER
 Versao 0.6: Testar API faz somente HEAD /dps/diagnostico-local na base HTTPS do Swagger fornecido. O identificador e intencionalmente invalido; 400 e compativel com rejeicao de formato e nao confirma autorizacao de emissao. Nao ha corpo nem POST, consulta de nota real, reenvio ou fallback para outra URL. O teste exige certificado instalado e confirmacao.
 
 
-Versao 0.7 - PREPARACAO OFFLINE, SEM ENVIO
+Versao 0.8 - TESTE UNITARIO CONTROLADO, SEM ENVIO
 No site, Configuracoes > Preparar DPS de teste: escolha um rascunho do proprio escritorio e confirme explicitamente suas configuracoes tributarias. Baixe a previa XML. A numeracao NAO e reservada e esse arquivo nao e nota autorizada.
 No conector, selecione o certificado instalado do escritorio e clique Conferir e assinar XML local. Escolha a previa, confira emitente/tomador/competencia/valor e confirme. Salve em arquivo NOVO. Arquivos existentes nao sao sobrescritos.
 O conector verifica o XSD restrito recebido em 20/10/2026, bloqueia tpAmb diferente de 2, exige tpEmit=1, confere o CNPJ do prestador com o OID ICP-Brasil CNPJ do SAN do certificado e assina sem exportar a chave. Certificados e-CPF e representacao de terceiros nao sao suportados nesta etapa.
@@ -34,3 +34,18 @@ Perfil inicial: XMLDSIG RSA-SHA1, digest SHA1, enveloped + C14N, certificado pub
 O XML assinado contem dados do documento e certificado PUBLICO. Guarde-o em pasta protegida. Chave privada, senha e arquivo PFX nao sao copiados para esse XML ou enviados ao site.
 Ainda nao sao verificados cadeia, revogacao, credenciamento, cadastro municipal, regras de negocio, IBS/CBS ou autorizacao fiscal. Nao existe envio de DPS nesta versao. Nao envie esse arquivo manualmente antes da revisao tecnica e fiscal.
 O gerador inicial atende apenas prestacao nacional tributavel de ISS sem retencoes, descontos, deducoes, beneficios ou suspensao. Nao mude dados tributarios para adaptar uma operacao que nao caiba no prototipo.
+
+
+VERSAO 0.8 - ENVIO UNITARIO A PRODUCAO RESTRITA
+A assinatura local continua separada do envio. Se ja assinou o XML na versao 0.7, pode usar o MESMO arquivo assinado: nao e necessario gera-lo ou assina-lo novamente.
+1. Selecione o certificado instalado do proprio escritorio.
+2. Clique Enviar 1 DPS de teste, escolha o XML ASSINADO e confira emitente, tomador, competencia, valor e identificador. A confirmacao padrao e NAO.
+3. Ao confirmar, o programa confere novamente XSD, assinatura, ambiente=2, prestador emitente e CNPJ do certificado, consulta GET /dps/{id} e so permite um POST /nfse se receber 404 estruturado do ambiente de testes e nao existir tentativa anterior neste PC.
+4. Historico duravel e XML exato sao gravados em %LOCALAPPDATA%\TriadeNfse\Conector\producao-restrita\<IdDPS>. O marcador de tentativa e gravado ANTES do POST. A pasta contem dados fiscais e o certificado PUBLICO do XML: mantenha-a protegida e inclua-a no backup. Nunca apague essa pasta para forcar reenvio.
+5. Timeout, erro 500 ou retorno inesperado deixam o resultado desconhecido e BLOQUEIAM outro POST. Use Consultar resultado com o MESMO XML: apenas GET, inclusive recuperacao de XML por chave quando localizada. Um 404 depois da tentativa nao desbloqueia reenvio automaticamente.
+6. A resposta 201 so e marcada Autorizada em teste depois de conferir ambiente, IdDPS, chave, XSD da NFS-e retornada e dados essenciais do documento. XML e resposta originais ficam no PC. A assinatura do servidor na NFS-e retornada nao foi verificada criptograficamente pelo conector; a resposta e recebida por HTTPS com verificacao TLS normal do Windows.
+7. Rejeicoes 400/403 estruturadas ficam registradas como Rejeitada em teste; copie apenas o diagnostico/codigos para analise. A resposta detalhada, potencialmente com dados fiscais, fica em resposta-envio.json no historico local.
+
+Este e um teste UNITARIO do proprio escritorio em UM PC, nao uma fila de producao ou integracao sincronizada ao site. Nao altera a situacao dos rascunhos no site, nao reserva numeracao no banco e nao coordena tentativas entre computadores. Nao repita o mesmo teste em outro computador. A integracao de fila e numeracao central sera feita antes de qualquer liberacao de lotes.
+Producao real continua bloqueada. O destino e fixo HTTPS sefin.producaorestrita.nfse.gov.br/SefinNacional. Nao ha fallback de URL, redirect ou retry automatico. O arquivo A1, a senha e a chave privada nao sao enviados ao site; o certificado publico e usado no TLS com a API oficial.
+Os testes automatizados usam transporte e retornos simulados, com certificados ficticios. A aceitacao real da assinatura e das regras tributarias ainda depende do teste confirmado pelo operador no PC. Nao foram homologados A3, e-CPF, representacao de terceiros, DANFSe, cancelamento, IBS/CBS ou cadeia/revogacao do certificado pelo conector.

@@ -8,8 +8,8 @@ def test_connector_download_requires_admin_and_contains_only_public_program(admi
     r=admin.get('/api/local-connector/download');assert r.status_code==200
     with zipfile.ZipFile(io.BytesIO(r.content)) as z:
         from app.dps_preview import SCHEMA_DIR
-        expected=['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','LEIA-ME.txt']+['schemas/'+p.name for p in SCHEMA_DIR.glob('*.xsd')]
-        assert len(expected)==15
+        expected=['Abrir_Conector.cmd','ConectorTriade.ps1','TriadeConnector.Core.psm1','TriadeDps.psm1','TriadeRestricted.psm1','LEIA-ME.txt']+['schemas/'+p.name for p in SCHEMA_DIR.glob('*.xsd')]
+        assert len(expected)==16
         assert sorted(z.namelist())==sorted('Triade_Conector_Local/'+n for n in expected)
         assert z.read('Triade_Conector_Local/ConectorTriade.ps1').startswith(b'\xef\xbb\xbf')
     admin.post('/api/users',json={'username':'operador-teste','password':'Senha-ficticia-456!','role':'operator','company_ids':[company['id']]})

@@ -93,6 +93,101 @@ function Get-TriadeConnectionFailure {
     return [PSCustomObject]@{ category=$category; codes=(@($codes|Select-Object -Unique) -join ', '); types=($types -join ' > '); message=$message }
 }
 
+function Resolve-TriadeDocumentationReference {
+    param([Uri]$BaseUri,[string]$Reference,[ValidateSet('json','script')][string]$Kind)
+    try {
+        $uri=[Uri]::new($BaseUri,$Reference.Replace('\/','/'))
+        if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'sefin.producaorestrita.nfse.gov.br' -or $uri.Port -ne 443 -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) { return $null }
+        $path=[Uri]::UnescapeDataString($uri.AbsolutePath)
+        if ($path -notmatch '^/API/SefinNacional/' -or $path.Contains('..') -or $path.Contains('\')) { return $null }
+        if ($Kind -eq 'json' -and ($path -match '(?i)(swagger|openapi)[^?]*\.json$' -or $path -match '(?i)^/API/SefinNacional/(swagger|docs)/(docs/)?v[0-9][A-Za-z0-9._-]*(/swagger)?$')) { return $uri }
+        if ($Kind -eq 'script' -and $path -match '(?i)/(swagger-ui-init|swagger-initializer)\.js$') { return $uri }
+    } catch { }
+    return $null
+}
+
+function Find-TriadeOpenApiReferences {
+    param([string]$Text,[Uri]$BaseUri)
+    # Data extraction only. Never execute JavaScript from the government page.
+    $normalized=$Text.Replace('\"','"').Replace('\/','/')
+    $found=@()
+    foreach($match in [Regex]::Matches($normalized,'(?i)(?:["'']?url["'']?)\s*:\s*["''](?<url>[^"''\r\n]+)["'']')) {
+        $uri=Resolve-TriadeDocumentationReference -BaseUri $BaseUri -Reference $match.Groups['url'].Value -Kind json
+        if ($null -ne $uri -and $found -notcontains $uri.AbsoluteUri) { $found+=$uri.AbsoluteUri }
+    }
+    # Older Swashbuckle pages declare rootUrl and discoveryPaths explicitly.
+    $rootMatch=[Regex]::Match($normalized,'(?i)\brootUrl\s*:\s*["''](?<root>[^"''\r\n]+)["'']')
+    $pathsMatch=[Regex]::Match($normalized,'(?is)\bdiscoveryPaths\s*:\s*(?:arrayFrom|JSON\.parse)\(\s*(?<q>["''])(?<paths>.*?)\k<q>\s*\)')
+    if ($rootMatch.Success -and $pathsMatch.Success) {
+        try {
+            $root=[Uri]::new($BaseUri,$rootMatch.Groups['root'].Value)
+            if ($root.Scheme -eq 'https' -and $root.Host -eq 'sefin.producaorestrita.nfse.gov.br' -and $root.Port -eq 443 -and -not $root.Query -and -not $root.Fragment -and -not $root.UserInfo -and $root.AbsolutePath.TrimEnd('/') -eq '/API/SefinNacional') {
+                $rawPaths=$pathsMatch.Groups['paths'].Value
+                if ($rawPaths.TrimStart().StartsWith('[')) { $paths=@($rawPaths|ConvertFrom-Json) } else { $paths=@($rawPaths.Split('|')) }
+                foreach($path in $paths) {
+                    if ($path -isnot [string]) { continue }
+                    $uri=Resolve-TriadeDocumentationReference -BaseUri ([Uri]($root.AbsoluteUri.TrimEnd('/')+'/')) -Reference $path -Kind json
+                    if ($null -ne $uri -and $found -notcontains $uri.AbsoluteUri) { $found+=$uri.AbsoluteUri }
+                }
+            }
+        } catch { }
+    }
+    return $found
+}
+
+function Read-TriadeDocumentationText {
+    param([Net.Http.HttpClient]$Client,[Uri]$Uri)
+    $response=$null;$stream=$null;$buffer=[IO.MemoryStream]::new()
+    try {
+        $response=$Client.GetAsync($Uri,[Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        if ([int]$response.StatusCode -ne 200) { throw 'A documentação não retornou HTTP 200. Nenhum redirecionamento foi seguido.' }
+        $stream=$response.Content.ReadAsStreamAsync().GetAwaiter().GetResult();$chunk=New-Object byte[] 8192
+        while (($read=$stream.Read($chunk,0,$chunk.Length)) -gt 0) {
+            if ($buffer.Length+$read -gt 2097152) { throw 'A documentação excedeu o limite de 2 MB.' }
+            $buffer.Write($chunk,0,$read)
+        }
+        return [Text.Encoding]::UTF8.GetString($buffer.ToArray())
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() };$buffer.Dispose();if ($null -ne $response) { $response.Dispose() }
+    }
+}
+
+function Get-TriadeRestrictedOpenApi {
+    param([Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
+    $null=Get-TriadeCertificateCheck -Certificate $Certificate
+    $handler=New-TriadeRestrictedHandler -Certificate $Certificate
+    $client=[Net.Http.HttpClient]::new($handler);$client.Timeout=[TimeSpan]::FromSeconds(15)
+    $index=[Uri]'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/docs/index'
+    try {
+        $html=Read-TriadeDocumentationText -Client $client -Uri $index
+        $candidates=@(Find-TriadeOpenApiReferences -Text $html -BaseUri $index)
+        $scriptCount=0
+        if ($candidates.Count -eq 0) {
+            foreach($match in [Regex]::Matches($html,'(?i)<script[^>]+src=["''](?<url>[^"'']+)["'']')) {
+                $scriptUri=Resolve-TriadeDocumentationReference -BaseUri $index -Reference $match.Groups['url'].Value -Kind script
+                if ($null -eq $scriptUri) { continue }
+                if ($scriptCount -ge 2) { break };$scriptCount++
+                $scriptText=Read-TriadeDocumentationText -Client $client -Uri $scriptUri
+                $candidates+=@(Find-TriadeOpenApiReferences -Text $scriptText -BaseUri $scriptUri)
+            }
+        }
+        if ($candidates.Count -eq 0) { throw 'Não foi encontrada uma referência OpenAPI na página. Abra o Swagger no navegador e salve o JSON indicado nele; nenhuma URL foi deduzida.' }
+        $lastError=$null
+        foreach($candidate in @($candidates|Select-Object -Unique|Select-Object -First 4)) {
+            try {
+                $text=Read-TriadeDocumentationText -Client $client -Uri ([Uri]$candidate)
+                $document=$text|ConvertFrom-Json
+                if (($null -eq $document.PSObject.Properties['openapi'] -and $null -eq $document.PSObject.Properties['swagger']) -or $null -eq $document.PSObject.Properties['paths']) { throw 'O conteúdo recebido não é um contrato OpenAPI reconhecido.' }
+                $sha=[Security.Cryptography.SHA256]::Create()
+                try { $hash=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }
+                return [PSCustomObject]@{ environment='restricted'; source_url=$candidate; captured_at=[DateTime]::UtcNow.ToString('o'); sha256_source_utf8=$hash; source_json=$text }
+            } catch { $lastError=$_.Exception }
+        }
+        if ($null -ne $lastError) { throw 'A referência foi encontrada, mas o JSON OpenAPI não pôde ser validado ou baixado. Não houve envio de DPS.' }
+        throw 'Documentação não encontrada.'
+    } finally { $client.Dispose() }
+}
+
 function Invoke-TriadeRestrictedProbe {
     param([Parameter(Mandatory=$true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
     $null = Get-TriadeCertificateCheck -Certificate $Certificate
@@ -114,4 +209,4 @@ function Invoke-TriadeRestrictedProbe {
     }
 }
 
-Export-ModuleMember -Function Get-TriadeWindowsCertificates,Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe,Get-TriadeConnectionFailure
+Export-ModuleMember -Function Get-TriadeWindowsCertificates,Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe,Get-TriadeConnectionFailure,Resolve-TriadeDocumentationReference,Find-TriadeOpenApiReferences,Get-TriadeRestrictedOpenApi

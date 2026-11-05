@@ -54,6 +54,16 @@ try {
     if ($timeout.category -ne 'timeout') { throw 'Timeout nao classificado.' }
     $socket=Get-TriadeConnectionFailure -Exception ([Net.Sockets.SocketException]::new(11001))
     if ($socket.category -ne 'network') { throw 'Rede nao classificada.' }
+    $base=[Uri]'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/docs/index'
+    $html='var configObject = JSON.parse(''{"urls":[{"url":"../swagger/v1/swagger.json","name":"v1"}]}'');'
+    $references=@(Find-TriadeOpenApiReferences -Text $html -BaseUri $base)
+    if ($references.Count -ne 1 -or $references[0] -ne 'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/swagger/v1/swagger.json') { throw 'Referencia observada nao resolvida.' }
+    $legacy="rootUrl: 'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional', discoveryPaths: arrayFrom('swagger/docs/v1')"
+    $legacyRefs=@(Find-TriadeOpenApiReferences -Text $legacy -BaseUri $base)
+    if ($legacyRefs.Count -ne 1 -or $legacyRefs[0] -ne 'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/swagger/docs/v1') { throw 'Referencia Swagger legada nao resolvida.' }
+    foreach($reference in @('https://sefin.nfse.gov.br/swagger.json','https://example.com/openapi.json','/API/SefinNacional/nfse/123','/API/SefinNacional/swagger.json?token=ficticio','http://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/swagger.json')) {
+        if ($null -ne (Resolve-TriadeDocumentationReference -BaseUri $base -Reference $reference -Kind json)) { throw 'Referencia indevida aceita.' }
+    }
     & (Join-Path $root 'ConectorTriade.ps1') -SelfTest
     Write-Output 'PASS: parser Windows PowerShell, validade, chave privada, importacao efemera, senha incorreta e handler sem redirects. Sem rede ou certificados reais.'
 } finally {

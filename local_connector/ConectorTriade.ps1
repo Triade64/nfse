@@ -10,7 +10,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeConnector.Core.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.3'
+$form.Text = 'Tríade NFS-e | Conector local 0.4'
 $form.ClientSize = [Drawing.Size]::new(720,650)
 $form.MinimumSize = [Drawing.Size]::new(736,689)
 $form.StartPosition = 'CenterScreen'
@@ -32,6 +32,7 @@ $network=[Windows.Forms.CheckBox]::new();$network.Text='Testar conexão com a do
 $null=Add-Label 'Na conexão, o certificado público é apresentado ao governo. A chave privada e a senha não são enviadas. HTTP 200 não comprova permissão para emitir.' 383 53
 $run=[Windows.Forms.Button]::new();$run.Text='Verificar';$run.SetBounds(22,444,160,38);$form.Controls.Add($run)
 $copy=[Windows.Forms.Button]::new();$copy.Text='Copiar resultado';$copy.Enabled=$false;$copy.SetBounds(196,444,185,38);$form.Controls.Add($copy)
+$saveApi=[Windows.Forms.Button]::new();$saveApi.Text='Salvar OpenAPI';$saveApi.SetBounds(397,444,170,38);$form.Controls.Add($saveApi)
 $output=[Windows.Forms.TextBox]::new();$output.Multiline=$true;$output.ReadOnly=$true;$output.ScrollBars='Vertical';$output.SetBounds(22,495,675,130);$form.Controls.Add($output)
 
 $windowsButton.Add_Click({
@@ -79,7 +80,7 @@ $run.Add_Click({
             $temporary=Import-TriadeLocalA1 -Path $fileBox.Text -Password $secure;$active=$temporary
         }
         $check=Get-TriadeCertificateCheck -Certificate $active
-        $lines=@('Tríade NFS-e | diagnóstico local 0.3',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
+        $lines=@('Tríade NFS-e | diagnóstico local 0.4',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
         if ($null -ne $temporary) { $lines+='Origem: arquivo A1 temporário (chave efêmera).' } else { $lines+='Origem: certificado instalado no Windows.' }
         $lines+=('PowerShell: '+$PSVersionTable.PSVersion.ToString()+' | .NET: '+[Environment]::Version.ToString())
         if ($network.Checked) {
@@ -95,6 +96,25 @@ $run.Add_Click({
         $password.Clear();if ($null -ne $secure) { $secure.Dispose() };if ($null -ne $temporary) { $temporary.Dispose() }
         $form.UseWaitCursor=$false;$run.Enabled=$true;$windowsButton.Enabled=$true;$fileButton.Enabled=$true
     }
+})
+$saveApi.Add_Click({
+    if ($null -eq $script:selectedCertificate) {
+        $output.Text='Para salvar a documentação, selecione primeiro o certificado instalado no Windows. Não use A1 temporário para este teste.'
+        return
+    }
+    $dialog=[Windows.Forms.SaveFileDialog]::new();$dialog.Title='Salvar documentação pública de homologação';$dialog.Filter='Documento JSON (*.json)|*.json';$dialog.FileName='Triade_OpenAPI_ProducaoRestrita.json';$dialog.OverwritePrompt=$true
+    try {
+        if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+        $saveApi.Enabled=$false;$run.Enabled=$false;$windowsButton.Enabled=$false;$fileButton.Enabled=$false;$form.UseWaitCursor=$true;$output.Text='Lendo referências da documentação oficial...';$form.Refresh()
+        $package=Get-TriadeRestrictedOpenApi -Certificate $script:selectedCertificate
+        [IO.File]::WriteAllText($dialog.FileName,($package|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+        $script:lastSummary='OpenAPI de produção restrita salvo. O JSON contém somente documentação, origem e hash, sem certificado ou senha. Nenhuma DPS enviada.'
+        $output.Text=$script:lastSummary;$copy.Enabled=$true
+    } catch {
+        $failure=Get-TriadeConnectionFailure -Exception $_.Exception
+        $script:lastSummary=@('Não foi possível salvar a documentação OpenAPI. Nenhuma DPS enviada.',('Códigos: '+$failure.codes),('Tipos: '+$failure.types),'Se a conexão já retornou HTTP 200, abra o Swagger no navegador e salve o JSON que ele indica.') -join [Environment]::NewLine
+        $output.Text=$script:lastSummary;$copy.Enabled=$true
+    } finally { $dialog.Dispose();$saveApi.Enabled=$true;$run.Enabled=$true;$windowsButton.Enabled=$true;$fileButton.Enabled=$true;$form.UseWaitCursor=$false }
 })
 $copy.Add_Click({ if ($script:lastSummary.Length -gt 0) { [Windows.Forms.Clipboard]::SetText($script:lastSummary) } })
 $form.Add_FormClosed({ $password.Clear();if ($null -ne $script:selectedCertificate) { $script:selectedCertificate.Dispose();$script:selectedCertificate=$null } })

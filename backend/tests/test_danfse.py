@@ -48,3 +48,29 @@ def test_qr_code_points_to_public_consultation_of_the_environment():
         pix=page.get_pixmap(dpi=300,clip=fitz.Rect(485,40,545,95))
         img=np.frombuffer(pix.samples,dtype=np.uint8).reshape(pix.h,pix.w,pix.n)
         assert cv2.QRCodeDetector().detectAndDecode(img[:,:,:3].copy())[0]==host+'4'*50
+
+
+def _with_places(toma_mun='4205407',prest_mun='3550308',pais=None):
+    x=etree.fromstring(nfse('2').encode())
+    toma=x.find(f'.//{{{NS}}}infDPS/{{{NS}}}toma')
+    end=etree.SubElement(toma,f'{{{NS}}}end');nac=etree.SubElement(end,f'{{{NS}}}endNac')
+    etree.SubElement(nac,f'{{{NS}}}cMun').text=toma_mun;etree.SubElement(nac,f'{{{NS}}}CEP').text='88010001'
+    for tag,val in [('xLgr','Rua Ficticia'),('nro','10'),('xBairro','Centro')]:etree.SubElement(end,f'{{{NS}}}{tag}').text=val
+    loc=x.find(f'.//{{{NS}}}locPrest')
+    for c in list(loc):loc.remove(c)
+    if pais:etree.SubElement(loc,f'{{{NS}}}cPaisPrestacao').text=pais
+    else:etree.SubElement(loc,f'{{{NS}}}cLocPrestacao').text=prest_mun
+    return etree.tostring(x,encoding='unicode')
+
+def test_municipality_names_and_uf_come_from_the_official_ibge_table():
+    t=text_of(build_danfse(_with_places()))
+    assert 'Florian\xf3polis / SC' in t          # tomador in another city: name + UF, not the IBGE code
+    assert '42.05407 / 88.010-001' in t
+    assert 'S\xe3o Paulo / SP / -' in t           # place of service elsewhere
+    assert 'IBGE 4205407' not in t
+
+def test_service_abroad_shows_the_country_and_unknown_codes_stay_visible():
+    t=text_of(build_danfse(_with_places(pais='PT')))
+    assert '- / - / Portugal' in t
+    t=text_of(build_danfse(_with_places(toma_mun='9999999')))
+    assert 'IBGE 9999999' in t

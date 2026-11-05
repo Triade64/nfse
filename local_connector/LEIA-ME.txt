@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.9.0 - ABERTURA PELO SITE (ASSINAR E ENVIAR)
+TRIADE NFS-e | CONECTOR LOCAL 0.9.1 - ABERTURA PELO SITE E DANFSE
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -97,3 +97,9 @@ Instalacao, uma vez por PC e usuario do Windows: extraia o ZIP numa pasta fixa e
 Uso: na tela Notas do site, clique em Assinar e enviar (uma nota ou varias selecionadas). O navegador pergunta se pode abrir o Triade Conector: confirme. O conector busca as notas reservadas, mostra emitente, tomadores, competencias e valores e pede UMA confirmacao para o lote. Depois escolhe o certificado do Windows com o CNPJ do emitente (pergunta se houver mais de um), assina, consulta a SEFIN e envia cada nota uma vez, e devolve o resultado ao site (autorizada com chave e XML da NFS-e, rejeitada com o codigo, ou situacao desconhecida para consultar depois).
 Seguranca: o link vale 15 minutos e somente para as notas escolhidas. O conector so aceita links do site https://nfse-sand.vercel.app (lista fixa no programa) e recusa qualquer outro endereco antes de acessar a rede. O XML recebido precisa ter o mesmo SHA-256 guardado pelo site; XSD, ambiente 2, prestador emitente e CNPJ do certificado sao conferidos de novo no PC. O site confere a NFS-e devolvida contra a DPS que reservou antes de marcar como autorizada. A chave privada e a senha nunca saem do PC. O historico em LocalAppData\TriadeNfse continua sendo a referencia: nunca apague.
 Producao real continua bloqueada.
+
+
+VERSAO 0.9.1 - DANFSE OFICIAL
+Depois que a NFS-e e autorizada, o conector baixa o DANFSe oficial (PDF) no Ambiente de Dados Nacional da producao restrita (https://adn.producaorestrita.nfse.gov.br/danfse/<chave>), usando o mesmo certificado do Windows. Confere que o arquivo e um PDF, guarda uma copia como danfse.pdf no historico do PC e envia ao site, onde aparece o botao DANFSe na nota.
+Se o DANFSe nao puder ser obtido, a NFS-e continua autorizada; o site mostra "DANFSe pendente" com o codigo, e o botao Buscar DANFSe abre o conector somente para baixar o PDF (sem assinar nem enviar nada a SEFIN).
+O endereco do DANFSe segue a documentacao do ADN indicada pelo Swagger da SEFIN; o primeiro uso real confirma o contrato.

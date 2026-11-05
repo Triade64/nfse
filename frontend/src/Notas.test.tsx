@@ -108,9 +108,26 @@ it('shows the authorized key and NFS-e download, and SEFIN codes for a rejection
  const api=vi.fn().mockResolvedValueOnce([authorized,rejected]);
  render(<Notas api={api} companies={companies} customers={[]} services={[]} role="admin"/>);
  await screen.findByText('AUTORIZADA');
- expect(screen.getByRole('link',{name:/NFS-e/}).getAttribute('href')).toBe('/api/dps/30/nfse.xml');
+ expect(screen.getByRole('link',{name:/XML NFS-e/}).getAttribute('href')).toBe('/api/dps/30/nfse.xml');
  expect(screen.getByText(/Chave …118757963196/)).toBeTruthy();
  expect(screen.getByText('SEFIN: E0712')).toBeTruthy();
  expect(screen.queryByRole('button',{name:/Assinar e enviar/})).toBeNull();
  expect(screen.getAllByRole('button',{name:/Descartar/})).toHaveLength(1);  // only the rejected one
+});
+
+
+it('offers the DANFSe download when the PDF exists and Buscar DANFSe when it does not',async()=>{
+ const base={...ready,situation:'NFS-e autorizada',editable:false};
+ const withPdf={...base,id:40,raw:{...raw,nome_tomador:'COM PDF'},dps:{id:50,series:'1',number:6,status:'Autorizada',identifier:'A',access_key:'1'.repeat(50),has_danfse:true}};
+ const withoutPdf={...base,id:41,raw:{...raw,nome_tomador:'SEM PDF'},dps:{id:51,series:'1',number:7,status:'Autorizada',identifier:'B',access_key:'2'.repeat(50),has_danfse:false,danfse_error:'DANFSE_HTTP_404'}};
+ const assign=vi.fn();vi.stubGlobal('location',{...window.location,set href(v:string){assign(v)},get href(){return 'http://localhost/'}});
+ const api=vi.fn().mockResolvedValueOnce([withPdf,withoutPdf]).mockResolvedValueOnce({url:'triade-nfse://assinar?site=x&ticket=z',expires_at:'',dps_ids:[51]});
+ render(<Notas api={api} companies={companies} customers={[]} services={[]} role="admin"/>);
+ await screen.findByText('COM PDF');
+ expect(screen.getByRole('link',{name:/DANFSe/}).getAttribute('href')).toBe('/api/dps/50/danfse.pdf');
+ expect(screen.getByText('DANFSe pendente (DANFSE_HTTP_404)')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:/Buscar DANFSe/}));
+ await waitFor(()=>expect(assign).toHaveBeenCalledWith('triade-nfse://assinar?site=x&ticket=z'));
+ expect(api).toHaveBeenCalledWith('/connector/tickets','POST',{dps_ids:[51]});
+ vi.unstubAllGlobals();
 });

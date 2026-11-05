@@ -98,8 +98,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.batches (
 	approval_digest VARCHAR(64), 
 	approved_by INTEGER, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(owner_id) REFERENCES nfse_app.users (id), 
-	FOREIGN KEY(approved_by) REFERENCES nfse_app.users (id)
+	FOREIGN KEY(approved_by) REFERENCES nfse_app.users (id), 
+	FOREIGN KEY(owner_id) REFERENCES nfse_app.users (id)
 )
 
 ;
@@ -154,8 +154,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.customers (
 	name VARCHAR(200) NOT NULL, 
 	details JSON NOT NULL, 
 	PRIMARY KEY (id), 
-	UNIQUE (company_id, document), 
-	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
+	UNIQUE (company_id, document)
 )
 
 ;
@@ -181,8 +181,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.dps_series (
 	next_number BIGINT NOT NULL, 
 	revision INTEGER NOT NULL, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
-	UNIQUE (company_id, environment, series)
+	UNIQUE (company_id, environment, series), 
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
 )
 
 ;
@@ -252,8 +252,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.user_companies (
 	user_id INTEGER NOT NULL, 
 	company_id INTEGER NOT NULL, 
 	PRIMARY KEY (user_id, company_id), 
-	FOREIGN KEY(user_id) REFERENCES nfse_app.users (id), 
-	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
+	FOREIGN KEY(user_id) REFERENCES nfse_app.users (id)
 )
 
 ;
@@ -330,13 +330,16 @@ CREATE TABLE IF NOT EXISTS nfse_app.dps (
 	nfse_xml TEXT, 
 	result JSON, 
 	result_at VARCHAR(40), 
+	danfse_pdf BYTEA, 
+	danfse_at VARCHAR(40), 
+	danfse_error VARCHAR(60), 
 	PRIMARY KEY (id), 
 	UNIQUE (identifier), 
 	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
 	CONSTRAINT uq_dps_number UNIQUE (company_id, environment, series, number), 
+	FOREIGN KEY(created_by) REFERENCES nfse_app.users (id), 
 	FOREIGN KEY(draft_id) REFERENCES nfse_app.drafts (id), 
-	FOREIGN KEY(discarded_by) REFERENCES nfse_app.users (id), 
-	FOREIGN KEY(created_by) REFERENCES nfse_app.users (id)
+	FOREIGN KEY(discarded_by) REFERENCES nfse_app.users (id)
 )
 
 ;

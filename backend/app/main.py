@@ -5,6 +5,8 @@ import hashlib
 import io
 import json
 import re
+import base64
+import binascii
 from decimal import Decimal
 import sqlite3
 import threading
@@ -144,7 +146,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.9.0',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.9.1',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -187,7 +189,7 @@ def download_local_connector(u=Depends(current_user)):
         for path in sorted(SCHEMA_DIR.glob('*.xsd')):
             archive.writestr('Triade_Conector_Local/schemas/'+path.name,path.read_bytes())
     output.seek(0)
-    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_9_0.zip"'})
+    return StreamingResponse(output,media_type='application/zip',headers={'Content-Disposition':'attachment; filename="Triade_Conector_Local_0_9_1.zip"'})
 
 @app.post('/api/drafts/{id}/restricted-preview')
 def restricted_preview(id:int,data:PreviewOptions,u=Depends(current_user),db=Depends(db_session)):
@@ -212,7 +214,8 @@ def batch_has_dps(db,batch_id):
     return db.scalar(select(DPS.id).join(Draft,DPS.draft_id==Draft.id).where(Draft.batch_id==batch_id).limit(1)) is not None
 
 def dps_public(x):
-    data=serialize(x);data.pop('xml',None);data.pop('nfse_xml',None);return data
+    data=serialize(x);data.pop('xml',None);data.pop('nfse_xml',None);data.pop('danfse_pdf',None)
+    data['has_danfse']=x.danfse_pdf is not None;return data
 
 class SeriesInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -454,8 +457,9 @@ def create_ticket(data:TicketInput,request:Request,u=Depends(current_user),db=De
     for dps_id in data.dps_ids:
         x=get_or_404(db,DPS,dps_id)
         if x.company_id:allowed_company(db,u,x.company_id)
-        if x.status not in ('Reservada','Desconhecida') or not x.xml:blocked.append(f'{x.series}/{x.number} ({x.status})')
-    if blocked:raise HTTPException(409,'Só DPS reservadas ou em consulta podem ir ao conector: '+', '.join(blocked))
+        danfse_only=x.status=='Autorizada' and x.danfse_pdf is None
+        if (x.status not in ('Reservada','Desconhecida') and not danfse_only) or not x.xml:blocked.append(f'{x.series}/{x.number} ({x.status})')
+    if blocked:raise HTTPException(409,'Só DPS reservadas, em consulta ou autorizadas sem DANFSe podem ir ao conector: '+', '.join(blocked))
     token=secrets.token_urlsafe(32)
     expires=(datetime.now(timezone.utc)+timedelta(minutes=TICKET_MINUTES)).isoformat()
     t=ConnectorTicket(token_hash=hashlib.sha256(token.encode()).hexdigest(),user_id=u.id,dps_ids=data.dps_ids,expires_at=expires)
@@ -471,6 +475,7 @@ def connector_ticket(request:Request,db):
 
 def job_public(x,d):
     return {'dps_id':x.id,'identifier':x.identifier,'series':x.series,'number':x.number,'status':x.status,'xml':x.xml,'xml_sha256':x.xml_sha256,
+            'access_key':x.access_key,'needs_danfse':x.status=='Autorizada' and x.danfse_pdf is None,
             'summary':{'cnpj':d.raw.get('cnpj_emitente'),'tomador':d.raw.get('nome_tomador'),'competencia':d.raw.get('competencia'),'valor':d.raw.get('valor_servico')}}
 
 @app.get('/api/connector/jobs')
@@ -512,6 +517,36 @@ def connector_result(dps_id:int,data:ConnectorResult,request:Request,db=Depends(
     if new=='Autorizada':x.access_key=data.access_key;x.nfse_xml=nfse_xml
     audit(db,db.get(User,t.user_id),'connector_result','dps',x.id,{'status':new,'http_status':data.http_status,'codes':data.codes,'access_key':x.access_key,'ticket_id':t.id})
     db.commit();return dps_public(x)
+
+class DanfseInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    pdf_b64:str|None=Field(default=None,max_length=7_000_000)
+    error_code:str|None=Field(default=None,pattern=r'^[A-Z0-9_]{3,40}$')
+
+@app.post('/api/connector/jobs/{dps_id}/danfse')
+def connector_danfse(dps_id:int,data:DanfseInput,request:Request,db=Depends(db_session)):
+    """The connector downloads the official DANFSe from the ADN (certificate on the PC) and hands the PDF to the site."""
+    t=connector_ticket(request,db)
+    if dps_id not in t.dps_ids:raise HTTPException(403,'Esta DPS não pertence ao ticket.')
+    x=get_or_404(db,DPS,dps_id,locked=True)
+    if x.status!='Autorizada':raise HTTPException(409,'DANFSe só para NFS-e autorizada.')
+    if (data.pdf_b64 is None)==(data.error_code is None):raise HTTPException(422,'Informe o PDF ou o código de falha.')
+    if data.error_code:
+        if x.danfse_pdf is None:x.danfse_error=data.error_code
+    else:
+        try:pdf=base64.b64decode(data.pdf_b64,validate=True)
+        except (binascii.Error,ValueError):raise HTTPException(422,'PDF em Base64 inválido.') from None
+        if len(pdf)>5*1024*1024 or not pdf.startswith(b'%PDF-'):raise HTTPException(422,'Arquivo recebido não é um PDF válido.')
+        x.danfse_pdf=pdf;x.danfse_at=now();x.danfse_error=None
+    audit(db,db.get(User,t.user_id),'connector_danfse','dps',x.id,{'ok':data.error_code is None,'error_code':data.error_code,'ticket_id':t.id})
+    db.commit();return dps_public(x)
+
+@app.get('/api/dps/{id}/danfse.pdf')
+def danfse_download(id:int,u=Depends(current_user),db=Depends(db_session)):
+    x=get_or_404(db,DPS,id)
+    if x.company_id:allowed_company(db,u,x.company_id)
+    if x.danfse_pdf is None:raise HTTPException(404,'DANFSe ainda não obtido para esta NFS-e.')
+    return Response(bytes(x.danfse_pdf),media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename="DANFSe_{x.access_key}.pdf"'})
 
 @app.get('/api/dps/{id}/nfse.xml')
 def nfse_xml_download(id:int,u=Depends(current_user),db=Depends(db_session)):

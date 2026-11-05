@@ -103,10 +103,31 @@ function Send-TriadeSiteResult {
  return Invoke-TriadeSiteRequest -Client $Client -Site $Site -Ticket $Ticket -Method POST -Path ('/api/connector/jobs/'+$DpsId+'/result') -Json ($payload|ConvertTo-Json -Compress)
 }
 
+function Send-TriadeSiteDanfse {
+ # Never changes the fiscal outcome: any failure is reported to the site as a code and the NFS-e stays authorized.
+ param([Net.Http.HttpClient]$FiscalClient,[Net.Http.HttpClient]$SiteClient,[string]$Site,[string]$Ticket,[int]$DpsId,[string]$AccessKey,[string]$JournalRoot,[string]$Identifier)
+ $code=$null;$pdf=$null
+ try{
+  $pdf=Get-TriadeDanfse -Client $FiscalClient -AccessKey $AccessKey
+  $directory=Join-Path $JournalRoot $Identifier
+  if([IO.Directory]::Exists($directory)){[IO.File]::WriteAllBytes((Join-Path $directory 'danfse.pdf'),$pdf)}
+ }catch{
+  $code=$_.Exception.Message;if($code -notmatch '^[A-Z0-9_]{3,40}$'){$code='DANFSE_UNCLASSIFIED'}
+ }
+ $payload=if($null -ne $code){@{error_code=$code}}else{@{pdf_b64=[Convert]::ToBase64String($pdf)}}
+ $null=Invoke-TriadeSiteRequest -Client $SiteClient -Site $Site -Ticket $Ticket -Method POST -Path ('/api/connector/jobs/'+$DpsId+'/danfse') -Json ($payload|ConvertTo-Json -Compress)
+ return $code
+}
+
 function Invoke-TriadeSiteJob {
  # One DPS: integrity -> local XSD/CNPJ/certificate checks + signature -> journaled submission -> report to site.
  param($Job,[Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,[string]$SchemaDirectory,[string]$JournalRoot,
        [Net.Http.HttpClient]$FiscalClient,[Net.Http.HttpClient]$SiteClient,[string]$Site,[string]$Ticket)
+ if([string]$Job.status -eq 'Autorizada'){
+  if(-not $Job.needs_danfse -or [string]$Job.access_key -notmatch '^[0-9]{50}$'){throw 'SITE_JOB_DONE'}
+  $danfse=Send-TriadeSiteDanfse -FiscalClient $FiscalClient -SiteClient $SiteClient -Site $Site -Ticket $Ticket -DpsId ([int]$Job.dps_id) -AccessKey ([string]$Job.access_key) -JournalRoot $JournalRoot -Identifier ([string]$Job.identifier)
+  return [PSCustomObject]@{state='Autorizada em teste';http_status=200;codes='';message='Somente DANFSe';danfse=$(if($null -eq $danfse){'ok'}else{$danfse})}
+ }
  $bytes=Get-TriadeJobBytes -Job $Job
  # Protect-TriadeOfflineDps re-validates XSD, tpAmb=2, prestador emitente and that the certificate CNPJ is the DPS CNPJ.
  $signed=Protect-TriadeOfflineDps -Bytes $bytes -Certificate $Certificate -SchemaDirectory $SchemaDirectory -OwnCnpj ([string]$Job.summary.cnpj)
@@ -116,6 +137,11 @@ function Invoke-TriadeSiteJob {
  try{$signedHash=([BitConverter]::ToString($sha.ComputeHash($signed))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
  $result=Invoke-TriadeSingleRestrictedDps -Bytes $signed -Certificate $Certificate -SchemaDirectory $SchemaDirectory -JournalRoot $JournalRoot -Client $FiscalClient -ConfirmRestrictedSend
  $null=Send-TriadeSiteResult -Client $SiteClient -Site $Site -Ticket $Ticket -DpsId ([int]$Job.dps_id) -Result $result -SignedSha256 $signedHash -JournalRoot $JournalRoot -Identifier $review.identifier
+ if($result.state -eq 'Autorizada em teste'){
+  $outcome=Get-TriadeJournalOutcome -JournalRoot $JournalRoot -Identifier $review.identifier
+  $danfse=Send-TriadeSiteDanfse -FiscalClient $FiscalClient -SiteClient $SiteClient -Site $Site -Ticket $Ticket -DpsId ([int]$Job.dps_id) -AccessKey $outcome.access_key -JournalRoot $JournalRoot -Identifier $review.identifier
+  $result|Add-Member -NotePropertyName danfse -NotePropertyValue $(if($null -eq $danfse){'ok'}else{$danfse}) -Force
+ }
  return $result
 }
 
@@ -141,4 +167,4 @@ function Get-TriadeProtocolCommand {
  return (Get-ItemProperty -Path $key).'(default)'
 }
 
-Export-ModuleMember -Function Get-TriadeAllowedSites,Resolve-TriadeLaunchUrl,New-TriadeSiteClient,Get-TriadeSiteJobs,Get-TriadeJobBytes,Send-TriadeSiteResult,Invoke-TriadeSiteJob,Register-TriadeProtocol,Get-TriadeProtocolCommand
+Export-ModuleMember -Function Send-TriadeSiteDanfse,Get-TriadeAllowedSites,Resolve-TriadeLaunchUrl,New-TriadeSiteClient,Get-TriadeSiteJobs,Get-TriadeJobBytes,Send-TriadeSiteResult,Invoke-TriadeSiteJob,Register-TriadeProtocol,Get-TriadeProtocolCommand

@@ -13,7 +13,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeSite.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.9.0'
+$form.Text = 'Tríade NFS-e | Conector local 0.9.1'
 $form.ClientSize = [Drawing.Size]::new(720,705)
 $form.MinimumSize = [Drawing.Size]::new(736,744)
 $form.StartPosition = 'CenterScreen'
@@ -279,11 +279,11 @@ function Invoke-TriadeSiteFlow([string]$LaunchUrl) {
         $launch=Resolve-TriadeLaunchUrl -Url $LaunchUrl
         $output.Text='Buscando as notas no site '+$launch.site+' ...';$form.Refresh()
         $siteClient=New-TriadeSiteClient
-        $jobs=@(Get-TriadeSiteJobs -Client $siteClient -Site $launch.site -Ticket $launch.ticket | Where-Object { $_.status -in @('Reservada','Desconhecida') })
+        $jobs=@(Get-TriadeSiteJobs -Client $siteClient -Site $launch.site -Ticket $launch.ticket | Where-Object { $_.status -in @('Reservada','Desconhecida') -or ($_.status -eq 'Autorizada' -and $_.needs_danfse) })
         if ($jobs.Count -eq 0) { $output.Text='Nenhuma DPS pendente neste link. Volte ao site e atualize a lista.';return }
         $issuers=@($jobs|ForEach-Object{[string]$_.summary.cnpj}|Select-Object -Unique)
         if ($issuers.Count -ne 1) { throw 'SITE_MIXED_ISSUERS' }
-        $list=@($jobs|ForEach-Object{('Série '+$_.series+' nº '+$_.number+' — '+$_.summary.tomador+' — competência '+$_.summary.competencia+' — R$ '+$_.summary.valor+$(if($_.status -eq 'Desconhecida'){' (consultar tentativa anterior)'}else{''}))})
+        $list=@($jobs|ForEach-Object{('Série '+$_.series+' nº '+$_.number+' — '+$_.summary.tomador+' — competência '+$_.summary.competencia+' — R$ '+$_.summary.valor+$(if($_.status -eq 'Desconhecida'){' (consultar tentativa anterior)'}elseif($_.status -eq 'Autorizada'){' (já autorizada: só baixar o DANFSe)'}else{''}))})
         $question=@(('Site: '+$launch.site),('Emitente (CNPJ): '+$issuers[0]),('Notas: '+$jobs.Count),'') + $list + @('','AUTORIZA ASSINAR E ENVIAR ESTAS DPS À PRODUÇÃO RESTRITA (TESTES)?','Cada nota é consultada antes do envio; tentativas anteriores nunca são reenviadas. A chave privada não sai deste PC. Produção real bloqueada.')
         if ([Windows.Forms.MessageBox]::Show($form,($question -join [Environment]::NewLine),'Tríade | Assinar e enviar notas do site',[Windows.Forms.MessageBoxButtons]::YesNo,[Windows.Forms.MessageBoxIcon]::Warning,[Windows.Forms.MessageBoxDefaultButton]::Button2) -ne [Windows.Forms.DialogResult]::Yes) { $output.Text='Cancelado. Nenhuma DPS assinada ou enviada.';return }
         $certificate=Select-TriadeCertificateFor $issuers[0]
@@ -297,7 +297,7 @@ function Invoke-TriadeSiteFlow([string]$LaunchUrl) {
             $output.Text=(($lines+@($label+': assinando e enviando...')) -join [Environment]::NewLine);$form.Refresh()
             try {
                 $result=Invoke-TriadeSiteJob -Job $job -Certificate $certificate -SchemaDirectory (Join-Path $PSScriptRoot 'schemas') -JournalRoot $journal -FiscalClient $fiscalClient -SiteClient $siteClient -Site $launch.site -Ticket $launch.ticket
-                $extra=@();if($result.codes){$extra+='códigos '+$result.codes};if($result.PSObject.Properties['diagnostic']){$extra+='etapa '+$result.diagnostic.stage+' / '+$result.diagnostic.reason}
+                $extra=@();if($result.codes){$extra+='códigos '+$result.codes};if($result.PSObject.Properties['diagnostic']){$extra+='etapa '+$result.diagnostic.stage+' / '+$result.diagnostic.reason};if($result.PSObject.Properties['danfse']){$extra+=$(if($result.danfse -eq 'ok'){'DANFSe enviado ao site'}else{'DANFSe pendente ('+$result.danfse+')'})}
                 $lines+=$label+': '+$result.state+' (HTTP '+$result.http_status+')'+$(if($extra){' — '+($extra -join '; ')}else{''})
             } catch {
                 $code=$_.Exception.Message;if($code -notmatch '^[A-Z0-9_]{3,40}$'){$code='UNCLASSIFIED'}
@@ -305,7 +305,7 @@ function Invoke-TriadeSiteFlow([string]$LaunchUrl) {
                 if($code -eq 'SITE_TICKET_EXPIRED'){break}
             }
         }
-        $script:lastSummary=(@('Tríade NFS-e | conector 0.9.0 pelo site','Ambiente: produção restrita (testes). Produção real bloqueada.') + $lines + @('','Volte ao site: a tela Notas atualiza a situação de cada nota.')) -join [Environment]::NewLine
+        $script:lastSummary=(@('Tríade NFS-e | conector 0.9.1 pelo site','Ambiente: produção restrita (testes). Produção real bloqueada.') + $lines + @('','Volte ao site: a tela Notas atualiza a situação de cada nota.')) -join [Environment]::NewLine
     } catch {
         $code=$_.Exception.Message;if($code -notmatch '^[A-Z0-9_]{3,40}$'){$code='UNCLASSIFIED'}
         $hint=@{LAUNCH_URL_INVALID='Link inválido. Gere de novo no site.';SITE_NOT_ALLOWED='Este link aponta para um site não autorizado. Nada foi feito.';SITE_TICKET_EXPIRED='O link expirou (15 minutos). Gere de novo no site.';CERT_NOT_FOUND='Nenhum certificado do Windows com o CNPJ do emitente foi encontrado.';CERT_NOT_SELECTED='Nenhum certificado selecionado.';SITE_MIXED_ISSUERS='O link mistura emitentes diferentes.'}[$code]

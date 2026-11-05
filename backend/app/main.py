@@ -25,7 +25,7 @@ from .db import Base, engine, Session, ROOT, DATA, URL
 from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access, DPS, DpsSeries, DISCARDED, now
 from .security import current_user, db_session, hasher, role, allowed_company, company_ids, issue_session
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
-from .dps_preview import PreviewOptions, ReserveOptions, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, SERIES_PATTERN, BRASILIA
+from .dps_preview import PreviewOptions, ReserveOptions, FiscalProfile, build_preview, build_dps, dps_identifier, normalize_series, SCHEMA_DIR, SERIES_PATTERN, BRASILIA
 from argon2.exceptions import VerificationError, InvalidHashError
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
@@ -138,7 +138,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.6.1',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.7.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -246,6 +246,10 @@ def reserve_dps(id:int,data:ReserveOptions,u=Depends(current_user),db=Depends(db
     if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
     d=get_or_404(db,Draft,id,locked=True)
     b=get_or_404(db,Batch,d.batch_id);batch_access(db,u,b)
+    return reserve_core(db,u,d,b,data)
+
+def reserve_core(db,u,d,b,data):
+    """Caller holds the transaction lock on the draft (SQLite BEGIN IMMEDIATE / PostgreSQL FOR UPDATE)."""
     existing=db.scalar(select(DPS).where(DPS.draft_id==d.id,active_dps()))
     if existing:return {**dps_public(existing),'existing':True}
     if b.revision!=data.revision:raise HTTPException(409,'Lote alterado. Reabra a conferência.')
@@ -308,6 +312,93 @@ def dps_xml(id:int,u=Depends(current_user),db=Depends(db_session)):
     if x.company_id:allowed_company(db,u,x.company_id)
     audit(db,u,'download_dps_xml','dps',x.id,{'xml_sha256':x.xml_sha256});db.commit()
     return Response(x.xml.encode('utf-8'),media_type='application/xml',headers={'Content-Disposition':f'attachment; filename="{x.identifier}.xml"'})
+
+# ---- Notes: one note = one draft in its own single-note batch, so locks and revisions never span unrelated notes.
+
+def note_situation(d,dps):
+    if dps is not None:return 'DPS '+(dps.status or 'Reservada').lower()
+    if d.status in ('Simulado','Na fila','Em processamento','Rejeitado'):return d.status
+    if d.errors:return 'Com inconsistência'
+    if d.fingerprint:return 'Pronta'
+    return 'Rascunho'
+
+def note_public(d,b,dps):
+    return {'id':d.id,'batch_id':d.batch_id,'batch_revision':b.revision,'company_id':d.company_id,'raw':d.raw,'errors':d.errors,'amount_cents':d.amount_cents,
+            'situation':note_situation(d,dps),'dps':dps_public(dps) if dps is not None else None,'editable':dps is None and b.status not in LOCKED}
+
+@app.get('/api/notes')
+def list_notes(u=Depends(current_user),db=Depends(db_session)):
+    query=select(Draft,Batch).join(Batch,Draft.batch_id==Batch.id).order_by(Draft.id.desc()).limit(3000)
+    if u.role!='admin':query=query.where(Batch.owner_id==u.id)
+    ids=company_ids(db,u)
+    if ids is not None:query=query.where(Draft.company_id.in_(ids))
+    rows=list(db.execute(query))
+    active={x.draft_id:x for x in db.scalars(select(DPS).where(DPS.draft_id.in_([d.id for d,_ in rows]),active_dps()))} if rows else {}
+    return [note_public(d,b,active.get(d.id)) for d,b in rows]
+
+class DuplicateInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    draft_ids:list[int]=Field(min_length=1,max_length=500)
+    competencia:date
+    confirm_review:Literal[True]
+    request_id:str=Field(pattern=r'^[A-Za-z0-9-]{16,80}$')
+
+@app.post('/api/notes/duplicate')
+def duplicate_notes(data:DuplicateInput,u=Depends(current_user),db=Depends(db_session)):
+    """Copies notes to a new competence, each into its own batch, validated. All-or-nothing; exact duplicates are refused."""
+    role(u,['admin','operator','approver'])
+    if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+    else:db.execute(text('SELECT pg_advisory_xact_lock(194612312)'))
+    digest=hashlib.sha256(json.dumps(data.model_dump(mode='json'),sort_keys=True).encode()).hexdigest()
+    previous=db.scalar(select(Audit).where(Audit.action=='duplicate_notes',Audit.user_id==u.id,Audit.info['request_id'].as_string()==data.request_id))
+    if previous:
+        if previous.info.get('request_digest')!=digest:raise HTTPException(409,'Identificador já usado em outra solicitação')
+        return {'created':previous.info.get('created_draft_ids',[]),'repeated':True}
+    if len(set(data.draft_ids))!=len(data.draft_ids):raise HTTPException(422,'Seleção de notas repetida')
+    sources=[]
+    for draft_id in data.draft_ids:
+        d=get_or_404(db,Draft,draft_id);batch_access(db,u,get_or_404(db,Batch,d.batch_id))
+        sources.append(d)
+    planned=[];conflicts=[];seen=set()
+    for d in sources:
+        raw={**d.raw,'competencia':data.competencia.isoformat()}
+        _,_,_,fp=normalize(raw)
+        if fp in seen or db.scalar(select(Draft.id).where(Draft.fingerprint==fp)):conflicts.append(f"{raw.get('nome_tomador') or 'tomador'} ({raw.get('valor_servico')})")
+        seen.add(fp);planned.append((d,raw))
+    if conflicts:raise HTTPException(409,'Já existe nota igual nesta competência para: '+', '.join(conflicts[:10])+('…' if len(conflicts)>10 else '')+'. Escolha outra data ou edite a nota existente.')
+    created=[]
+    for source,raw in planned:
+        b=Batch(name=f"{raw.get('nome_tomador','Nota')[:150]} · {data.competencia.isoformat()}",owner_id=u.id,status='Rascunho');db.add(b);db.flush()
+        d=Draft(batch_id=b.id,company_id=source.company_id,line=1,raw={k:cell_text(v) for k,v in raw.items()},errors=[],amount_cents=0,status='Rascunho',snapshot={});db.add(d);db.flush()
+        validate_batch(db,u,b);created.append(d.id)
+    audit(db,u,'duplicate_notes','draft',created[0],{'request_id':data.request_id,'request_digest':digest,'source_draft_ids':data.draft_ids,'created_draft_ids':created,'competencia':data.competencia.isoformat()})
+    db.commit()
+    return {'created':created,'repeated':False}
+
+class EmitInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    batch_revision:int
+    expected_raw:dict[str,str]
+    confirm:Literal[True]
+
+@app.post('/api/notes/{id}/emit')
+def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_session)):
+    """Reserves the DPS with the company's fiscal profile. Still restricted environment only; signing/sending stays in the connector."""
+    role(u,['admin'])
+    if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+    d=get_or_404(db,Draft,id,locked=True)
+    b=get_or_404(db,Batch,d.batch_id);batch_access(db,u,b)
+    if not d.company_id:raise HTTPException(422,'Nota sem emitente cadastrado.')
+    c=get_or_404(db,Company,d.company_id);allowed_company(db,u,c.id)
+    profile=c.config.get('perfil_fiscal')
+    if not profile:raise HTTPException(422,'Configure o perfil fiscal da empresa (Empresas → Editar) antes de emitir.')
+    if b.revision!=data.batch_revision or d.raw!=data.expected_raw:raise HTTPException(409,'Nota alterada. Recarregue a lista antes de emitir.')
+    has_active=db.scalar(select(DPS.id).where(DPS.draft_id==d.id,active_dps())) is not None
+    if not has_active and c.revision!=d.company_revision and not batch_has_dps(db,b.id):
+        # Company data changed since validation (e.g. fiscal profile edited): revalidate this single note first.
+        validate_batch(db,u,b);db.flush()
+    options=ReserveOptions(**{k:v for k,v in profile.items() if k!='series'},series=profile['series'],revision=b.revision,expected_raw=d.raw,own_company_cnpj=c.cnpj,confirm_reserve=True,confirm_scope=True)
+    return reserve_core(db,u,d,b,options)
 
 @app.get('/api/setup')
 def setup_status(db=Depends(db_session)):
@@ -375,6 +466,10 @@ def save_company(data,db,u,c=None):
     if not str(cfg.get('municipio_ibge','')).isdigit() or len(str(cfg.get('municipio_ibge','')))!=7:
         raise HTTPException(422,'Informe município IBGE de 7 dígitos')
     if not cfg.get('regime'):raise HTTPException(422,'Informe o regime tributário')
+    if cfg.get('perfil_fiscal'):
+        try:cfg['perfil_fiscal']=FiscalProfile(**cfg['perfil_fiscal']).model_dump(mode='json')
+        except (ValueError,TypeError) as exc:raise HTTPException(422,'Perfil fiscal inválido: '+(exc.errors()[0]['msg'] if hasattr(exc,'errors') else str(exc))) from None
+    else:cfg.pop('perfil_fiscal',None)
     if c is None:c=Company(cnpj=doc,name=data.name,config=cfg);db.add(c)
     else:
         if c.cnpj!=doc:raise HTTPException(422,'CNPJ é imutável. Cadastre outra empresa.')

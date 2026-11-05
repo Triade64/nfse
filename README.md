@@ -1,4 +1,4 @@
-# Tríade NFS-e — versão web 0.6.1
+# Tríade NFS-e — versão web 0.7.0
 
 Preparação e repetição de notas para os mesmos tomadores, com nova competência e conferência humana. React/TypeScript e FastAPI na Vercel; PostgreSQL no Supabase. Nenhuma nota fiscal real é emitida: o processamento disponível é uma simulação.
 

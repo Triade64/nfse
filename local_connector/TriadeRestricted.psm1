@@ -87,7 +87,7 @@ function Read-TriadeFiscalJson {
  param($Response)
  if([string]::IsNullOrWhiteSpace($Response.text)){throw 'RESPONSE_FORMAT'}
  $body=$Response.text|ConvertFrom-Json
- if($body.tipoAmbiente -ne 2){throw 'RESPONSE_ENVIRONMENT'}
+ if($body -isnot [PSCustomObject] -or ($body.tipoAmbiente -isnot [int] -and $body.tipoAmbiente -isnot [long]) -or $body.tipoAmbiente -ne 2){throw 'RESPONSE_ENVIRONMENT'}
  return $body
 }
 function Get-TriadeFiscalErrorCodes {

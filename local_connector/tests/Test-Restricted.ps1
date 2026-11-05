@@ -41,6 +41,8 @@ try{
 $schema=[Xml.Schema.XmlSchemaSet]::new();$schema.XmlResolver=[TriadeOffline.XmlFiles]::new($SchemaDirectory);$null=$schema.Add('http://www.sped.fazenda.gov.br/nfse',(Join-Path $SchemaDirectory 'NFSe_v1.01.xsd'));$schema.Compile();$nfse.Schemas=$schema;$nfse.Validate($null)
 $envelope=(ConvertTo-TriadeDpsEnvelope -Bytes ([Text.Encoding]::UTF8.GetBytes($nfse.OuterXml)))|ConvertFrom-Json
 $success=@{tipoAmbiente=2;idDps=$review.identifier;chaveAcesso=$key;nfseXmlGZipB64=$envelope.dpsXmlGZipB64}|ConvertTo-Json -Compress
+# Exercise the real parser/recovery separately so failures are visible in the synthetic test.
+$null=& (Get-Module TriadeRestricted) {param($B,$R,$D,$S) Save-TriadeReturnedNfse -Body $B -Identifier $R.identifier -Key $B.chaveAcesso -Directory $D -SchemaDirectory $S -Review $R} ($success|ConvertFrom-Json) $review $Directory $SchemaDirectory
 $found=@{tipoAmbiente=2;idDps=$review.identifier;chaveAcesso=$key}|ConvertTo-Json -Compress
 $missing='{"tipoAmbiente":2,"erro":{"codigo":"TESTE404","descricao":"FICTICIO"}}'
 $rejected='{"tipoAmbiente":2,"erros":[{"codigo":"TESTE_REJEICAO","descricao":"FICTICIO"}]}'
@@ -59,7 +61,7 @@ try{
  if($result.attempted -or $case.handler.Calls.Count -ne 1 -or $case.handler.Calls[0] -notmatch '^GET '){throw 'Consulta fez POST.'}
  $case=New-FakeClient 'sucesso' @(404,201,404) @($missing,$success,$missing);$clients+=$case
  $result=Invoke-Case $case $true
- if($result.state -ne 'Autorizada em teste' -or $result.http_status -ne 201){throw 'Resposta 201 valida nao reconhecida.'}
+ if($result.state -ne 'Autorizada em teste' -or $result.http_status -ne 201){throw ('Resposta 201 valida nao reconhecida. '+($result|ConvertTo-Json -Compress)+' Calls: '+($case.handler.Calls -join ';')+' Files: '+((Get-ChildItem -LiteralPath (Join-Path $case.root $review.identifier)).Name -join ','))}
  $null=Invoke-Case $case $true
  if(@($case.handler.Calls|Where-Object{$_ -match '^POST '}).Count -ne 1){throw 'POST repetido apos sucesso.'}
  $statePath=Join-Path (Join-Path $case.root $review.identifier) 'estado.json';$state=[IO.File]::ReadAllText($statePath)|ConvertFrom-Json

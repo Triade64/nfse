@@ -70,3 +70,8 @@ def test_im_is_explicit_without_changing_company_registration(row,company):
     assert registered==snapshot
     with pytest.raises(ValueError,match='sem inscrição'):
         build_preview(row,company,PreviewOptions(**{**OPTIONS,'include_provider_im':True}))
+
+
+def test_me_epp_cannot_omit_total_taxes_e0712(row,company):
+    with pytest.raises(ValueError,match='E0712'):
+        PreviewOptions(**{**OPTIONS,'totals_mode':'not_informed','simples_percent':None})

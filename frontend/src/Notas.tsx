@@ -20,7 +20,7 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
  const [query,setQuery]=useState(''),[company,setCompany]=useState(''),[situation,setSituation]=useState(''),[month,setMonth]=useState('');
  const [checked,setChecked]=useState<number[]>([]);
  const [dup,setDup]=useState<Note[]|null>(null),[dupDate,setDupDate]=useState(''),[dupOk,setDupOk]=useState(false),[requestId,setRequestId]=useState(()=>crypto.randomUUID());
- const [emitting,setEmitting]=useState<Note|null>(null),[emitOk,setEmitOk]=useState(false);
+ const [emitting,setEmitting]=useState<Note|null>(null),[emitOk,setEmitOk]=useState(false),[percent,setPercent]=useState('');
  const [discarding,setDiscarding]=useState<Note|null>(null),[reason,setReason]=useState(''),[discardOk,setDiscardOk]=useState(false);
  const [editing,setEditing]=useState<{note?:Note;raw:Record<string,string>}|null>(null);
  const canEdit=['admin','operator','approver'].includes(role),isAdmin=role==='admin';
@@ -33,9 +33,10 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
  const visible=useMemo(()=>notes.filter(n=>(!company||String(n.company_id)===company)&&(!situation||n.situation===situation)&&(!month||n.raw.competencia?.startsWith(month))&&(!query||(n.raw.nome_tomador+' '+n.raw.documento_tomador+' '+n.raw.descricao_servico).toLowerCase().includes(query.toLowerCase()))),[notes,company,situation,month,query]);
  const selected=notes.filter(n=>checked.includes(n.id));
 
+ async function openEmit(n:Note){setEmitting(n);setEmitOk(false);setPercent('');setNotice('');setError('');if(companyOf(n.company_id)?.config.perfil_fiscal?.op_simp_nac==='3'){try{const d=await api('/companies/'+n.company_id+'/fiscal-defaults');if(d.last_simples_percent)setPercent(d.last_simples_percent)}catch{/* prefill is optional */}}}
  function openDuplicate(list:Note[]){setDup(list);setDupDate('');setDupOk(false);setRequestId(crypto.randomUUID());setNotice('')}
  async function submitDuplicate(e:FormEvent){e.preventDefault();if(!dup)return;await run(async()=>{const r=await api('/notes/duplicate','POST',{draft_ids:dup.map(n=>n.id),competencia:dupDate,confirm_review:dupOk,request_id:requestId});setDup(null);setChecked([]);await load();setNotice(`${r.created.length} nota${r.created.length>1?'s':''} criada${r.created.length>1?'s':''} para ${dateBR(dupDate)}. Confira e emita.`)})}
- async function submitEmit(e:FormEvent){e.preventDefault();if(!emitting)return;await run(async()=>{const r=await api('/notes/'+emitting.id+'/emit','POST',{batch_revision:emitting.batch_revision,expected_raw:emitting.raw,confirm:emitOk});const a=document.createElement('a');a.href='/api/dps/'+r.id+'/xml';a.download=r.identifier+'.xml';a.click();setEmitting(null);await load();setNotice(`${r.existing?'Esta nota já tinha DPS: ':'DPS reservada: '}série ${r.series}, nº ${r.number}. O XML foi baixado — assine e envie pelo conector.`)})}
+ async function submitEmit(e:FormEvent){e.preventDefault();if(!emitting)return;await run(async()=>{const asks=companyOf(emitting.company_id)?.config.perfil_fiscal?.op_simp_nac==='3';const r=await api('/notes/'+emitting.id+'/emit','POST',{batch_revision:emitting.batch_revision,expected_raw:emitting.raw,confirm:emitOk,...(asks?{simples_percent:percent.replace(',','.')}:{})});const a=document.createElement('a');a.href='/api/dps/'+r.id+'/xml';a.download=r.identifier+'.xml';a.click();setEmitting(null);await load();setNotice(`${r.existing?'Esta nota já tinha DPS: ':'DPS reservada: '}série ${r.series}, nº ${r.number}. O XML foi baixado — assine e envie pelo conector.`)})}
  async function submitDiscard(e:FormEvent){e.preventDefault();if(!discarding?.dps)return;await run(async()=>{const r=await api('/dps/'+discarding.dps!.id+'/discard','POST',{reason,confirm_not_authorized:discardOk});setDiscarding(null);await load();setNotice(`DPS série ${r.series} nº ${r.number} descartada. A nota pode ser emitida com um novo número.`)})}
  async function submitEdit(e:FormEvent){e.preventDefault();if(!editing)return;await run(async()=>{
   if(editing.note)await api('/drafts/'+editing.note.id,'PUT',{raw:editing.raw,revision:editing.note.batch_revision});
@@ -66,7 +67,7 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
    <td><div className="entryActions">
     {canEdit&&n.editable&&<button className="textBtn" onClick={()=>{setEditing({note:n,raw:{...blank(),...n.raw}});setNotice('')}}><Pencil size={15}/> Editar</button>}
     {canEdit&&<button className="textBtn" onClick={()=>openDuplicate([n])}><Copy size={15}/> Duplicar</button>}
-    {isAdmin&&n.situation==='Pronta'&&<button className="textBtn" onClick={()=>{setEmitting(n);setEmitOk(false);setNotice('')}}><Send size={15}/> Emitir</button>}
+    {isAdmin&&n.situation==='Pronta'&&<button className="textBtn" onClick={()=>openEmit(n)}><Send size={15}/> Emitir</button>}
     {n.dps&&<a className="textBtn" href={'/api/dps/'+n.dps.id+'/xml'} download={n.dps.identifier+'.xml'}><Download size={15}/> XML</a>}
     {isAdmin&&n.dps?.status==='Reservada'&&<button className="textBtn" onClick={()=>{setDiscarding(n);setReason('');setDiscardOk(false);setNotice('')}}><Trash2 size={15}/> Descartar</button>}
    </div></td></tr>)}</tbody></table></div>
@@ -83,11 +84,12 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
   {emitting&&(()=>{const c=companyOf(emitting.company_id),p=c?.config.perfil_fiscal;return <Dialog title="Emitir nota" close={()=>setEmitting(null)}><form onSubmit={submitEmit}>
    <div className="reportRow"><strong>{emitting.raw.nome_tomador}</strong><span>{money(emitting.amount_cents)} · competência {dateBR(emitting.raw.competencia)}</span></div>
    <p>Emitente: <strong>{c?.name}</strong> ({c?.cnpj})</p>
-   {p?<p className="muted">Perfil fiscal: série {p.series} · {p.op_simp_nac==='3'?'ME/EPP optante do Simples':p.op_simp_nac==='2'?'MEI':'Não optante'} · IM {p.include_provider_im?'incluída':'omitida'} · alíquota {p.include_iss_rate?'incluída':'omitida'}{p.totals_mode==='simples_percent'?` · tributos SN ${p.simples_percent}%`:''}</p>:<div className="warning">Esta empresa ainda não tem perfil fiscal. Configure em Empresas → Editar.</div>}
+   {p?<p className="muted">Perfil fiscal: série {p.series} · {p.op_simp_nac==='3'?'ME/EPP optante do Simples':p.op_simp_nac==='2'?'MEI':'Não optante'} · IM {p.include_provider_im?'incluída':'omitida'} · alíquota {p.include_iss_rate?'incluída':'omitida'}</p>:<div className="warning">Esta empresa ainda não tem perfil fiscal. Configure em Empresas → Editar.</div>}
+   {p?.op_simp_nac==='3'&&<label>Percentual aproximado dos tributos do Simples (%)<input required inputMode="decimal" pattern="[0-9]{1,3}([.,][0-9]{1,2})?" value={percent} onChange={e=>setPercent(e.target.value)} placeholder="Alíquota efetiva deste mês, ex.: 6,54"/><small>Obrigatório para ME/EPP (E0712). Use a alíquota efetiva do mês; o campo traz o último percentual usado.</small></label>}
    <div className="warning">Produção restrita (testes). O site reserva o próximo número e baixa o XML; a assinatura e o envio continuam no conector, no PC com o certificado.</div>
    <label className="checkLabel"><input type="checkbox" checked={emitOk} onChange={e=>setEmitOk(e.target.checked)}/>Conferi emitente, tomador, competência e valor. Autorizo reservar o próximo número desta série.</label>
    {error&&<div className="error" role="alert">{error}</div>}
-   <div className="modalActions"><button type="button" onClick={()=>setEmitting(null)}>Cancelar</button><button className="primary" disabled={busy||!emitOk||!p}><Send size={16}/> Reservar e baixar XML</button></div></form></Dialog>})()}
+   <div className="modalActions"><button type="button" onClick={()=>setEmitting(null)}>Cancelar</button><button className="primary" disabled={busy||!emitOk||!p||(p.op_simp_nac==='3'&&!/^[0-9]{1,3}([.,][0-9]{1,2})?$/.test(percent))}><Send size={16}/> Reservar e baixar XML</button></div></form></Dialog>})()}
 
   {discarding&&<Dialog title="Descartar reserva" close={()=>setDiscarding(null)}><form onSubmit={submitDiscard}>
    <p>DPS série {discarding.dps?.series} nº {discarding.dps?.number} · {discarding.raw.nome_tomador}. O número fica ocupado e nunca é reutilizado; a nota volta a poder ser emitida.</p>

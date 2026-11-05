@@ -8,6 +8,12 @@ foreach($name in @('ConectorTriade.ps1','TriadeConnector.Core.psm1')) {
     if ($errors.Count -ne 0) { throw ('Falha no parser PowerShell: '+$name) }
 }
 Import-Module (Join-Path $root 'TriadeConnector.Core.psm1') -Force
+# Exercise the same read-only store routine as the button; do not install any certificate.
+$installed=Get-TriadeWindowsCertificates
+if ($installed -isnot [Security.Cryptography.X509Certificates.X509Certificate2Collection]) { throw 'Colecao de certificados invalida.' }
+foreach($item in $installed) { $item.Dispose() }
+if ($null -eq [Security.Cryptography.X509Certificates.X509Certificate2UI]) { throw 'Assembly do seletor ausente.' }
+
 $key=[Security.Cryptography.RSACng]::new(2048)
 $cert=$null;$expired=$null;$public=$null;$imported=$null;$handler=$null;$password=$null
 $directory=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())

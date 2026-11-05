@@ -1,4 +1,4 @@
-TRIADE NFS-e | CONECTOR LOCAL 0.2 - DIAGNOSTICO
+TRIADE NFS-e | CONECTOR LOCAL 0.3 - DIAGNOSTICO
 
 1. Salve o ZIP no PC. Em Propriedades do ZIP, use Desbloquear se o Windows apresentar essa opcao.
 2. Clique em Extrair tudo. Nao execute de dentro do ZIP.
@@ -16,3 +16,5 @@ Nao ha servidor HTTP local, pareamento com o site, emissao, assinatura de DPS, c
 O certificado original continua onde voce o guardou. Feche o programa ao terminar. Nenhum log de certificado, senha ou nome do titular e gravado pelo conector. O Windows e o ambiente local continuam responsaveis pela seguranca da memoria, arquivos e certificados ja instalados.
 
 Versao 0.2: o resultado identifica certificado do Windows versus A1 temporario e mostra somente categoria, tipos de excecao e codigos numericos da falha. Mensagens internas, caminhos e identidade do certificado nao sao copiados. O codigo sugere uma linha de investigacao; nao confirma sozinho a causa.
+
+Versao 0.3: carrega explicitamente System.Security, verifica loja vazia antes de abrir o seletor e identifica em qual etapa a selecao falhou. A consulta usa apenas o repositorio Pessoal do usuario atual, em leitura. Se a lista estiver vazia, confira Win+R > certmgr.msc > Pessoal > Certificados. Nao execute como administrador para tentar resolver essa selecao: outro usuario pode ter um repositorio diferente.

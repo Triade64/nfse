@@ -2,6 +2,22 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http
+Add-Type -AssemblyName System.Security
+
+function Get-TriadeWindowsCertificates {
+    $store=[Security.Cryptography.X509Certificates.X509Store]::new([Security.Cryptography.X509Certificates.StoreName]::My,[Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+    $available=[Security.Cryptography.X509Certificates.X509Certificate2Collection]::new()
+    try {
+        $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+        foreach($certificate in $store.Certificates) {
+            if ($certificate.HasPrivateKey) { [void]$available.Add($certificate) } else { $certificate.Dispose() }
+        }
+        return ,$available
+    } catch {
+        foreach($certificate in $available) { $certificate.Dispose() }
+        throw
+    } finally { $store.Close();$store.Dispose() }
+}
 
 function Import-TriadeLocalA1 {
     param([Parameter(Mandatory=$true)][string]$Path,[Parameter(Mandatory=$true)][Security.SecureString]$Password)
@@ -98,4 +114,4 @@ function Invoke-TriadeRestrictedProbe {
     }
 }
 
-Export-ModuleMember -Function Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe,Get-TriadeConnectionFailure
+Export-ModuleMember -Function Get-TriadeWindowsCertificates,Import-TriadeLocalA1,Get-TriadeCertificateCheck,New-TriadeRestrictedHandler,Invoke-TriadeRestrictedProbe,Get-TriadeConnectionFailure

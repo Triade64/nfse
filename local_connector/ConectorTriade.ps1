@@ -10,7 +10,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeConnector.Core.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.2'
+$form.Text = 'Tríade NFS-e | Conector local 0.3'
 $form.ClientSize = [Drawing.Size]::new(720,650)
 $form.MinimumSize = [Drawing.Size]::new(736,689)
 $form.StartPosition = 'CenterScreen'
@@ -35,21 +35,31 @@ $copy=[Windows.Forms.Button]::new();$copy.Text='Copiar resultado';$copy.Enabled=
 $output=[Windows.Forms.TextBox]::new();$output.Multiline=$true;$output.ReadOnly=$true;$output.ScrollBars='Vertical';$output.SetBounds(22,495,675,130);$form.Controls.Add($output)
 
 $windowsButton.Add_Click({
+    $available=$null;$picked=$null;$phase='leitura do repositório CurrentUser/My'
     try {
-        $store=[Security.Cryptography.X509Certificates.X509Store]::new('My','CurrentUser')
-        try {
-            $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
-            $available=[Security.Cryptography.X509Certificates.X509Certificate2Collection]::new()
-            foreach($c in $store.Certificates) { if ($c.HasPrivateKey) { [void]$available.Add($c) } }
-            $picked=[Security.Cryptography.X509Certificates.X509Certificate2UI]::SelectFromCollection($available,'Tríade NFS-e','Selecione o certificado do escritório. Ele permanece no Windows.',[Security.Cryptography.X509Certificates.X509SelectionFlag]::SingleSelection)
-            if ($picked.Count -gt 0) {
-                if ($null -ne $script:selectedCertificate) { $script:selectedCertificate.Dispose() }
-                $script:selectedCertificate=[Security.Cryptography.X509Certificates.X509Certificate2]::new($picked[0])
-                $selection.Text='Certificado do Windows selecionado. Validade: '+$script:selectedCertificate.NotAfter.ToString('dd/MM/yyyy')
-                $fileBox.Clear();$password.Clear();$output.Clear();$copy.Enabled=$false
-            }
-        } finally { $store.Close() }
-    } catch { $output.Text='Não foi possível abrir os certificados do usuário atual do Windows. Nenhum certificado foi enviado.' }
+        $available=Get-TriadeWindowsCertificates
+        if ($available.Count -eq 0) {
+            $script:lastSummary='Nenhum certificado com chave privada foi encontrado em Pessoal do usuário atual. Confira com Win+R > certmgr.msc > Pessoal > Certificados. Ter o arquivo A1 no PC não significa que esteja instalado no Windows. Nenhum certificado foi enviado.'
+            $output.Text=$script:lastSummary;$copy.Enabled=$true
+            return
+        }
+        $phase='janela de seleção do Windows'
+        $picked=[Security.Cryptography.X509Certificates.X509Certificate2UI]::SelectFromCollection($available,'Tríade NFS-e','Selecione o certificado do escritório. Ele permanece no Windows.',[Security.Cryptography.X509Certificates.X509SelectionFlag]::SingleSelection,$form.Handle)
+        if ($picked.Count -gt 0) {
+            $phase='seleção do certificado'
+            $newSelection=[Security.Cryptography.X509Certificates.X509Certificate2]::new($picked[0])
+            if ($null -ne $script:selectedCertificate) { $script:selectedCertificate.Dispose() }
+            $script:selectedCertificate=$newSelection
+            $selection.Text='Certificado do Windows selecionado. Validade: '+$script:selectedCertificate.NotAfter.ToString('dd/MM/yyyy')
+            $fileBox.Clear();$password.Clear();$output.Clear();$copy.Enabled=$false
+        }
+    } catch {
+        $failure=Get-TriadeConnectionFailure -Exception $_.Exception
+        $script:lastSummary=@('Falha ao selecionar certificado do Windows.',('Etapa: '+$phase),('Códigos: '+$failure.codes),('Tipos: '+$failure.types),'Nenhum certificado foi enviado; nenhuma permissão foi alterada.') -join [Environment]::NewLine
+        $output.Text=$script:lastSummary;$copy.Enabled=$true
+    } finally {
+        if ($null -ne $available) { foreach($certificate in $available) { $certificate.Dispose() } }
+    }
 })
 $fileButton.Add_Click({
     $dialog=[Windows.Forms.OpenFileDialog]::new();$dialog.Title='Selecionar A1 local';$dialog.Filter='Certificado A1 (*.pfx;*.p12)|*.pfx;*.p12';$dialog.CheckFileExists=$true
@@ -69,7 +79,7 @@ $run.Add_Click({
             $temporary=Import-TriadeLocalA1 -Path $fileBox.Text -Password $secure;$active=$temporary
         }
         $check=Get-TriadeCertificateCheck -Certificate $active
-        $lines=@('Tríade NFS-e | diagnóstico local 0.2',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
+        $lines=@('Tríade NFS-e | diagnóstico local 0.3',('Arquivo/chave presentes e certificado dentro da validade. Vencimento: '+$check.expires_on))
         if ($null -ne $temporary) { $lines+='Origem: arquivo A1 temporário (chave efêmera).' } else { $lines+='Origem: certificado instalado no Windows.' }
         $lines+=('PowerShell: '+$PSVersionTable.PSVersion.ToString()+' | .NET: '+[Environment]::Version.ToString())
         if ($network.Checked) {
@@ -89,6 +99,9 @@ $run.Add_Click({
 $copy.Add_Click({ if ($script:lastSummary.Length -gt 0) { [Windows.Forms.Clipboard]::SetText($script:lastSummary) } })
 $form.Add_FormClosed({ $password.Clear();if ($null -ne $script:selectedCertificate) { $script:selectedCertificate.Dispose();$script:selectedCertificate=$null } })
 if ($SelfTest) {
+    $nativeUi=[Security.Cryptography.X509Certificates.X509Certificate2UI]
+    $pickerMethods=@($nativeUi.GetMethods()|Where-Object { $_.Name -eq 'SelectFromCollection' -and $_.GetParameters().Count -eq 5 })
+    if ($pickerMethods.Count -eq 0) { throw 'Seletor Windows indisponível.' }
     if ($form.Controls.Count -lt 10 -or -not $password.UseSystemPasswordChar -or $network.Checked) { throw 'Falha na construção da interface.' }
     $form.Dispose();Write-Output 'PASS: interface Windows construída, senha mascarada, conexão externa desmarcada.'
 } else { [void]$form.ShowDialog();$form.Dispose() }

@@ -29,13 +29,22 @@ def test_danfse_contains_key_data_and_test_environment_warning():
     pdf=build_danfse(nfse('2'))
     assert pdf.startswith(b'%PDF-')
     t=text_of(pdf)
-    for expected in ['NFS-e n','12','4444 4444','11.222.333/0001-81','529.982.247-25','TOMADOR FICTICIO','010101','R$ 10,00','SEM VALOR FISCAL','PRODU','Autorizada','05/11/2026 16:27:04']:
+    for expected in ['DANFSe v2.0','Documento Auxiliar da NFS-e','4'*50,'11.222.333/0001-81','529.982.247-25','TOMADOR FICTICIO','01.01.01 / -','R$ 10,00','NFS-e SEM VALIDADE JUR','NFS-e Gerada','NFS-e regular','Prestador','05/11/2026 16:27:04','IBS/CBS','DATA CIENTIFICA']:
         assert expected in t,expected
 
 def test_production_document_has_no_test_warning():
     t=text_of(build_danfse(nfse('1')))
-    assert 'SEM VALOR FISCAL' not in t and 'PRODU\xc7\xc3O RESTRITA' not in t
+    assert 'NFS-e SEM VALIDADE JUR' not in t and 'DANFSe v2.0' in t and 'Tipo de Ambiente: 1' in t
 
 def test_invalid_xml_is_refused():
     import pytest
     with pytest.raises(ValueError):build_danfse(f'<NFSe xmlns="{NS}"/>')
+
+
+def test_qr_code_points_to_public_consultation_of_the_environment():
+    import fitz,cv2,numpy as np
+    for amb,host in [('2','https://www.producaorestrita.nfse.gov.br/ConsultaPublica?tpc=1&chave='),('1','https://www.nfse.gov.br/ConsultaPublica?tpc=1&chave=')]:
+        page=fitz.open(stream=build_danfse(nfse(amb)),filetype='pdf')[0]
+        pix=page.get_pixmap(dpi=300,clip=fitz.Rect(485,40,545,95))
+        img=np.frombuffer(pix.samples,dtype=np.uint8).reshape(pix.h,pix.w,pix.n)
+        assert cv2.QRCodeDetector().detectAndDecode(img[:,:,:3].copy())[0]==host+'4'*50

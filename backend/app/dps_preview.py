@@ -36,6 +36,9 @@ class FiscalChoices(BaseModel):
                 raise ValueError('Percentual SN exige ME/EPP optante e percentual explícito.')
         elif self.simples_percent is not None:
             raise ValueError('Percentual informado fora da opção SN.')
+        elif self.op_simp_nac == '3':
+            # API rule E0712 (confirmed in the restricted environment on 2026-11-05).
+            raise ValueError('Para ME/EPP optante pelo SN a API exige o percentual aproximado do Simples (E0712); "não informar" é recusado.')
         return self
 
 class PreviewOptions(FiscalChoices):
@@ -62,9 +65,43 @@ class ReserveOptions(FiscalChoices):
     confirm_reserve: Literal[True]
     confirm_scope: Literal[True]
 
-class FiscalProfile(FiscalChoices):
-    """Per-company fiscal choices, reviewed once by an administrator and reused on every emission."""
+class FiscalProfile(BaseModel):
+    """Per-company fiscal choices, reviewed once by an administrator and reused on every emission.
+    The Simples percentage varies month to month, so it is NOT stored here: it is confirmed at each emission."""
+    model_config = ConfigDict(extra='forbid')
+    op_simp_nac: Literal['1','2','3']
+    reg_ap_trib_sn: Literal['1','2','3'] | None
+    reg_esp_trib: Literal['0','1','2','3','4','5','6','9']
+    totals_mode: Literal['not_informed','simples_percent']
+    include_provider_im: bool
+    include_iss_rate: bool
     series: str = Field(pattern=SERIES_PATTERN)
+
+    @model_validator(mode='before')
+    @classmethod
+    def drop_legacy_percent(cls, data):
+        # Profiles saved by 0.7.0 carried a fixed percentage; it is ignored from 0.7.1 on.
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k != 'simples_percent'}
+            # Only one value is legal per regime (E0712), so a 0.7.0 profile saved as "not_informed" is brought forward.
+            if data.get('op_simp_nac') in ('1', '2', '3'):
+                data['totals_mode'] = 'simples_percent' if data['op_simp_nac'] == '3' else 'not_informed'
+        return data
+
+    @model_validator(mode='after')
+    def coherent(self):
+        if (self.op_simp_nac == '3') != (self.reg_ap_trib_sn is not None):
+            raise ValueError('Informe o regime de apuração somente para ME/EPP optante pelo SN.')
+        if (self.op_simp_nac == '3') != (self.totals_mode == 'simples_percent'):
+            raise ValueError('ME/EPP optante pelo SN informa o percentual do Simples a cada emissão (E0712); demais regimes não informam estimativa.')
+        return self
+
+    def choices(self, simples_percent):
+        """Fiscal choices for one emission; the percentage is required exactly when the profile asks for it."""
+        if (self.totals_mode == 'simples_percent') != (simples_percent is not None):
+            raise ValueError('Informe o percentual aproximado do Simples desta emissão.' if self.totals_mode == 'simples_percent' else 'Esta empresa não informa percentual do Simples.')
+        data = self.model_dump(exclude={'series'})
+        return {**data, 'simples_percent': simples_percent}
 
 def check_instant(issued_at: datetime):
     if issued_at.utcoffset() is None:

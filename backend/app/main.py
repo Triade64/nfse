@@ -4,6 +4,8 @@ import secrets
 import hashlib
 import io
 import json
+import re
+from decimal import Decimal
 import sqlite3
 import threading
 import time
@@ -138,7 +140,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.7.0',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.7.1',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -380,6 +382,17 @@ class EmitInput(BaseModel):
     batch_revision:int
     expected_raw:dict[str,str]
     confirm:Literal[True]
+    simples_percent:Decimal|None=Field(default=None,ge=0,le=100,decimal_places=2)
+
+@app.get('/api/companies/{id}/fiscal-defaults')
+def fiscal_defaults(id:int,u=Depends(current_user),db=Depends(db_session)):
+    """Last Simples percentage actually used by this company, to prefill the next emission."""
+    role(u,['admin']);get_or_404(db,Company,id);allowed_company(db,u,id)
+    last=None
+    for xml in db.scalars(select(DPS.xml).where(DPS.company_id==id,DPS.xml.is_not(None)).order_by(DPS.id.desc()).limit(20)):
+        match=re.search(r'<pTotTribSN>([0-9.]+)</pTotTribSN>',xml)
+        if match:last=match.group(1);break
+    return {'last_simples_percent':last}
 
 @app.post('/api/notes/{id}/emit')
 def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_session)):
@@ -397,7 +410,12 @@ def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_sessio
     if not has_active and c.revision!=d.company_revision and not batch_has_dps(db,b.id):
         # Company data changed since validation (e.g. fiscal profile edited): revalidate this single note first.
         validate_batch(db,u,b);db.flush()
-    options=ReserveOptions(**{k:v for k,v in profile.items() if k!='series'},series=profile['series'],revision=b.revision,expected_raw=d.raw,own_company_cnpj=c.cnpj,confirm_reserve=True,confirm_scope=True)
+    try:
+        fiscal=FiscalProfile(**profile)
+        options=ReserveOptions(**fiscal.choices(data.simples_percent),series=fiscal.series,revision=b.revision,expected_raw=d.raw,own_company_cnpj=c.cnpj,confirm_reserve=True,confirm_scope=True)
+    except ValueError as exc:
+        message=exc.errors()[0]['msg'] if hasattr(exc,'errors') else str(exc)
+        raise HTTPException(422,message.removeprefix('Value error, ')+' Revise o perfil fiscal da empresa se necessário.') from None
     return reserve_core(db,u,d,b,options)
 
 @app.get('/api/setup')
@@ -468,7 +486,7 @@ def save_company(data,db,u,c=None):
     if not cfg.get('regime'):raise HTTPException(422,'Informe o regime tributário')
     if cfg.get('perfil_fiscal'):
         try:cfg['perfil_fiscal']=FiscalProfile(**cfg['perfil_fiscal']).model_dump(mode='json')
-        except (ValueError,TypeError) as exc:raise HTTPException(422,'Perfil fiscal inválido: '+(exc.errors()[0]['msg'] if hasattr(exc,'errors') else str(exc))) from None
+        except (ValueError,TypeError) as exc:raise HTTPException(422,'Perfil fiscal inválido: '+(exc.errors()[0]['msg'] if hasattr(exc,'errors') else str(exc)).removeprefix('Value error, ')) from None
     else:cfg.pop('perfil_fiscal',None)
     if c is None:c=Company(cnpj=doc,name=data.name,config=cfg);db.add(c)
     else:

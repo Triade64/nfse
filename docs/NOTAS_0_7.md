@@ -49,3 +49,13 @@ Sem migração de banco: o perfil fica em `companies.config`. Requer as migraç�
   - emitir com o perfil e baixar o XML;
   - erro de duplicata exibido no diálogo.
 - Navegador, local, com dados fictícios: perfil configurado pela tela de Empresas; 2 notas duplicadas de outubro para novembro; emissão gerou série 1 nº 2 com XML sem IM e sem alíquota; descarte devolveu a nota para Pronta.
+
+## Atualização 0.7.1: percentual do Simples a cada emissão (E0712)
+
+A DPS série 1 nº 2 foi enviada com `indTotTrib=0` ("não informar estimativa") e recebeu a rejeição **E0712**: *"Para ME/EPP o indicador de informação de valor total de tributos não pode ser informado."* Para ME/EPP do Simples, o percentual aproximado (`pTotTribSN`) é obrigatório. Como a alíquota efetiva do Simples varia mês a mês, o percentual deixa de ser fixo no perfil:
+
+- **Perfil fiscal:** não guarda mais o percentual. Para ME/EPP (opSimpNac=3), os tributos totais são sempre "percentual do Simples informado a cada emissão". Para os demais regimes, "não informar". Um perfil salvo na 0.7.0 como "não informar" é ajustado automaticamente, porque é o único valor válido.
+- **Emitir:** para ME/EPP, pede o "Percentual aproximado dos tributos do Simples (%)", já preenchido com o último percentual usado pela empresa (`GET /api/companies/{id}/fiscal-defaults`). Aceita vírgula ou ponto.
+- **Validação:** `FiscalChoices` recusa ME/EPP com "não informar" em todos os caminhos: prévia, reserva manual e emissão.
+
+Testes: backend com 71 de 71 aprovados (novos: percentual obrigatório por emissão, preenchimento com o último uso, conversão do perfil 0.7.0, empresa não optante sem percentual, E0712 na prévia). Frontend com 17 de 17 aprovados. No navegador local, um perfil 0.7.0 "não informar" foi convertido, e a emissão com "6,54" gerou `<pTotTribSN>6.54</pTotTribSN>`.

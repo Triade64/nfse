@@ -9,7 +9,7 @@ import threading
 import time
 import zipfile
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from typing import Literal
@@ -743,7 +743,8 @@ def backup(u=Depends(current_user),db=Depends(db_session)):
     with tempfile.TemporaryDirectory() as tmp:
         path=Path(tmp)/'nfse.db'
         with engine.connect() as conn:
-            with sqlite3.connect(path) as dst:conn.connection.driver_connection.backup(dst)
+            # sqlite3's context manager only commits; closing() releases the file so Windows can delete the temp dir.
+            with closing(sqlite3.connect(path)) as dst:conn.connection.driver_connection.backup(dst)
         buffer=io.BytesIO()
         with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
             z.write(path,'nfse.db');z.writestr('LEIA.txt','Backup contém dados pessoais e hashes de senha. Guarde em local protegido. Restaure apenas com o servidor parado.')

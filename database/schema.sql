@@ -38,6 +38,28 @@ DROP POLICY IF EXISTS nfse_backend ON nfse_app.companies;
 CREATE POLICY nfse_backend ON nfse_app.companies TO nfse_runtime USING (true) WITH CHECK (true);
 
 
+CREATE TABLE IF NOT EXISTS nfse_app.login_attempts (
+	id SERIAL NOT NULL, 
+	at VARCHAR(40) NOT NULL, 
+	username VARCHAR(80) NOT NULL, 
+	ip_hash VARCHAR(64) NOT NULL, 
+	success BOOLEAN NOT NULL, 
+	PRIMARY KEY (id)
+)
+
+;
+
+ALTER TABLE nfse_app.login_attempts ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON nfse_app.login_attempts FROM PUBLIC, anon, authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON nfse_app.login_attempts TO nfse_runtime;
+
+DROP POLICY IF EXISTS nfse_backend ON nfse_app.login_attempts;
+
+CREATE POLICY nfse_backend ON nfse_app.login_attempts TO nfse_runtime USING (true) WITH CHECK (true);
+
+
 CREATE TABLE IF NOT EXISTS nfse_app.users (
 	id SERIAL NOT NULL, 
 	username VARCHAR(80) NOT NULL, 
@@ -98,8 +120,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.batches (
 	approval_digest VARCHAR(64), 
 	approved_by INTEGER, 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(owner_id) REFERENCES nfse_app.users (id), 
-	FOREIGN KEY(approved_by) REFERENCES nfse_app.users (id)
+	FOREIGN KEY(approved_by) REFERENCES nfse_app.users (id), 
+	FOREIGN KEY(owner_id) REFERENCES nfse_app.users (id)
 )
 
 ;
@@ -154,8 +176,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.customers (
 	name VARCHAR(200) NOT NULL, 
 	details JSON NOT NULL, 
 	PRIMARY KEY (id), 
-	UNIQUE (company_id, document), 
-	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
+	UNIQUE (company_id, document)
 )
 
 ;
@@ -181,8 +203,8 @@ CREATE TABLE IF NOT EXISTS nfse_app.dps_series (
 	next_number BIGINT NOT NULL, 
 	revision INTEGER NOT NULL, 
 	PRIMARY KEY (id), 
-	UNIQUE (company_id, environment, series), 
-	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id)
+	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
+	UNIQUE (company_id, environment, series)
 )
 
 ;
@@ -229,6 +251,7 @@ CREATE TABLE IF NOT EXISTS nfse_app.sessions (
 	token_hash VARCHAR(64) NOT NULL, 
 	user_id INTEGER NOT NULL, 
 	expires VARCHAR(40) NOT NULL, 
+	last_seen VARCHAR(40), 
 	PRIMARY KEY (token_hash), 
 	FOREIGN KEY(user_id) REFERENCES nfse_app.users (id)
 )
@@ -335,11 +358,11 @@ CREATE TABLE IF NOT EXISTS nfse_app.dps (
 	danfse_error VARCHAR(60), 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(created_by) REFERENCES nfse_app.users (id), 
-	FOREIGN KEY(discarded_by) REFERENCES nfse_app.users (id), 
 	FOREIGN KEY(company_id) REFERENCES nfse_app.companies (id), 
-	CONSTRAINT uq_dps_number UNIQUE (company_id, environment, series, number), 
+	FOREIGN KEY(discarded_by) REFERENCES nfse_app.users (id), 
 	FOREIGN KEY(draft_id) REFERENCES nfse_app.drafts (id), 
-	CONSTRAINT uq_dps_environment_identifier UNIQUE (environment, identifier)
+	CONSTRAINT uq_dps_environment_identifier UNIQUE (environment, identifier), 
+	CONSTRAINT uq_dps_number UNIQUE (company_id, environment, series, number)
 )
 
 ;
@@ -420,6 +443,10 @@ CREATE INDEX IF NOT EXISTS idx_nfse_dps_id ON nfse_app.nfse (dps_id);
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA nfse_app TO nfse_runtime;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_repeat_request ON nfse_app.audit (user_id, (info->>'request_id')) WHERE action='repeat_batch';
+
+CREATE INDEX IF NOT EXISTS idx_login_attempts_user_at ON nfse_app.login_attempts (username, at);
+
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_at ON nfse_app.login_attempts (ip_hash, at);
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dps_active_draft ON nfse_app.dps (draft_id) WHERE status IS NULL OR status <> 'Descartada';
 

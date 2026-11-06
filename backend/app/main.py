@@ -27,7 +27,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import CLOUD,allowed_hosts,allowed_origins
 from .db import Base, engine, Session, ROOT, DATA, URL
 from .models import User, LoginSession, Company, Customer, Service, Batch, Draft, Job, Audit, Access, DPS, DpsSeries, ConnectorTicket, DISCARDED, now
-from .security import current_user, db_session, hasher, role, allowed_company, company_ids, issue_session
+from .security import current_user, db_session, hasher, role, allowed_company, company_ids, issue_session, COOKIE, DUMMY_HASH, client_ip, login_blocked, record_login
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
 from urllib.parse import urlencode
 from .nfse_result import check_authorized_nfse
@@ -156,7 +156,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.10.1',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.11.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -172,7 +172,12 @@ async def local_protection(request,call_next):
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
     response.headers['Cache-Control']='no-store'
-    response.headers['Content-Security-Policy']="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+    response.headers['Content-Security-Policy']="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    response.headers['Referrer-Policy']='same-origin'
+    response.headers['Permissions-Policy']='camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()'
+    response.headers['Cross-Origin-Opener-Policy']='same-origin'
+    response.headers['Cross-Origin-Resource-Policy']='same-origin'
+    if CLOUD:response.headers['Strict-Transport-Security']='max-age=63072000; includeSubDomains'
     return response
 
 @app.exception_handler(IntegrityError)
@@ -548,6 +553,11 @@ def connector_result(dps_id:int,data:ConnectorResult,request:Request,db=Depends(
     x.result_at=now()
     if new=='Autorizada':x.access_key=data.access_key;x.nfse_xml=nfse_xml
     audit(db,db.get(User,t.user_id),'connector_result','dps',x.id,{'status':new,'http_status':data.http_status,'codes':data.codes,'access_key':x.access_key,'ticket_id':t.id})
+    # 0.11.0: once every DPS of the link has a final result, the link only lives 2 more minutes (time for the optional
+    # DANFSe upload), instead of the full 15.
+    if all((y:=db.get(DPS,i)) is not None and y.status in ('Autorizada','Rejeitada','Descartada') for i in t.dps_ids):
+        short=(datetime.now(timezone.utc)+timedelta(minutes=2)).isoformat()
+        if short<t.expires_at:t.expires_at=short;audit(db,db.get(User,t.user_id),'connector_ticket_shortened','connector_ticket',t.id,{'expires_at':short})
     db.commit();return dps_public(x)
 
 class DanfseInput(BaseModel):
@@ -616,22 +626,24 @@ def setup(data:SetupInput,response:Response,db=Depends(db_session)):
     db.add(u); db.flush(); audit(db,u,'setup','user',u.id); issue_session(db,u,response)
     return serialize(u)
 
-attempts={}; attempts_lock=threading.Lock()
 @app.post('/api/login')
 def login(data:Credentials,request:Request,response:Response,db=Depends(db_session)):
-    key=request.client.host if request.client else 'local'
-    with attempts_lock:
-        recent=[x for x in attempts.get(key,[]) if time.monotonic()-x<60]
-        if len(recent)>=10:
-            raise HTTPException(429,'Muitas tentativas. Aguarde um minuto.')
-        attempts[key]=recent+[time.monotonic()]
-    u=db.scalar(select(User).where(User.username==data.username))
+    """0.11.0: throttling lives in the database (works across serverless instances), per username and per client."""
+    ip=client_ip(request);username=data.username.strip()
+    if login_blocked(db,username,ip):
+        audit(db,None,'login_blocked','user',0,{'username':username});db.commit()
+        raise HTTPException(429,'Muitas tentativas de entrada. Aguarde 15 minutos ou fale com o administrador.')
+    u=db.scalar(select(User).where(User.username==username))
     try:
         if not u or not u.active:
+            hasher.verify(DUMMY_HASH,data.password)  # same cost as a real check
             raise ValueError()
         hasher.verify(u.password_hash,data.password)
     except (VerificationError,InvalidHashError,ValueError):
+        record_login(db,username,ip,False);audit(db,None,'login_failed','user',u.id if u else 0,{'username':username});db.commit()
         raise HTTPException(401,'Usuário ou senha inválidos')
+    if hasher.check_needs_rehash(u.password_hash):u.password_hash=hasher.hash(data.password)
+    record_login(db,username,ip,True)
     audit(db,u,'login','user',u.id); issue_session(db,u,response)
     return serialize(u)
 
@@ -640,8 +652,8 @@ def me(u=Depends(current_user)):
     return serialize(u)
 @app.post('/api/logout')
 def logout(request:Request,response:Response,u=Depends(current_user),db=Depends(db_session)):
-    db.execute(delete(LoginSession).where(LoginSession.token_hash==hashlib.sha256(request.cookies.get('nfse_session','').encode()).hexdigest()))
-    db.commit(); response.delete_cookie('nfse_session'); return {'ok':True}
+    db.execute(delete(LoginSession).where(LoginSession.token_hash==hashlib.sha256(request.cookies.get(COOKIE,'').encode()).hexdigest()))
+    db.commit(); response.delete_cookie(COOKIE,path='/',secure=CLOUD,httponly=True,samesite='strict'); return {'ok':True}
 
 class CompanyInput(BaseModel):
     model_config=ConfigDict(extra='forbid')

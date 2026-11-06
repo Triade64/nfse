@@ -20,6 +20,17 @@ class LoginSession(Base):
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
     expires: Mapped[str] = mapped_column(String(40))
+    # 0.11.0: idle timeout. Nullable so sessions created before the migration keep working until they expire.
+    last_seen: Mapped[str | None] = mapped_column(String(40), nullable=True)
+class LoginAttempt(Base):
+    """0.11.0: failed/successful logins kept in the database, so throttling works across serverless instances."""
+    __tablename__ = 'login_attempts'
+    __table_args__ = (Index('idx_login_attempts_user_at', 'username', 'at'), Index('idx_login_attempts_ip_at', 'ip_hash', 'at'))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[str] = mapped_column(String(40))
+    username: Mapped[str] = mapped_column(String(80))
+    ip_hash: Mapped[str] = mapped_column(String(64))
+    success: Mapped[bool] = mapped_column(default=False)
 class Company(Base):
     __tablename__ = 'companies'
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -62,9 +62,17 @@ def batch_access(db,user,b):
 def serialize(obj):
     return {c.name:getattr(obj,c.name) for c in obj.__table__.columns if c.name not in ('password_hash','token_hash')}
 
+def environment_fingerprint(fp,c):
+    """0.10.1: duplicate detection is per environment, so a test note never blocks the identical real note.
+    Restricted-environment fingerprints keep the 0.9 value; production ones are derived from it."""
+    if c is not None and company_environment(c)==PRODUCTION:
+        return hashlib.sha256(('producao:'+fp).encode()).hexdigest()
+    return fp
+
 def validation(db,user,d):
     raw, errors, amount, fp = normalize(d.raw)
     c = db.scalar(select(Company).where(Company.cnpj==raw['cnpj_emitente']))
+    fp = environment_fingerprint(fp,c)
     if not c:
         errors.append('cnpj_emitente: cadastre a empresa antes de validar')
     else:
@@ -148,7 +156,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.10.0',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.10.1',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -401,6 +409,7 @@ def duplicate_notes(data:DuplicateInput,u=Depends(current_user),db=Depends(db_se
     for d in sources:
         raw={**d.raw,'competencia':data.competencia.isoformat()}
         _,_,_,fp=normalize(raw)
+        fp=environment_fingerprint(fp,db.get(Company,d.company_id) if d.company_id else None)
         if fp in seen or db.scalar(select(Draft.id).where(Draft.fingerprint==fp)):conflicts.append(f"{raw.get('nome_tomador') or 'tomador'} ({raw.get('valor_servico')})")
         seen.add(fp);planned.append((d,raw))
     if conflicts:raise HTTPException(409,'Já existe nota igual nesta competência para: '+', '.join(conflicts[:10])+('…' if len(conflicts)>10 else '')+'. Escolha outra data ou edite a nota existente.')

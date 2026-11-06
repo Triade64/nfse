@@ -13,7 +13,7 @@ Import-Module (Join-Path $PSScriptRoot 'TriadeSite.psm1') -Force
 $script:selectedCertificate = $null
 $script:lastSummary = ''
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Tríade NFS-e | Conector local 0.10.0'
+$form.Text = 'Tríade NFS-e | Conector local 0.10.1'
 $form.ClientSize = [Drawing.Size]::new(720,705)
 $form.MinimumSize = [Drawing.Size]::new(736,744)
 $form.StartPosition = 'CenterScreen'
@@ -322,7 +322,7 @@ function Invoke-TriadeSiteFlow([string]$LaunchUrl) {
                 if($code -eq 'SITE_TICKET_EXPIRED'){break}
             }
         }
-        $script:lastSummary=(@('Tríade NFS-e | conector 0.10.0 pelo site',$(if($production){'Ambiente: PRODUÇÃO (notas reais). Histórico: LocalAppData\TriadeNfse\Conector\producao'}else{'Ambiente: produção restrita (testes).'})) + $lines + @('','Volte ao site: a tela Notas atualiza a situação de cada nota.')) -join [Environment]::NewLine
+        $script:lastSummary=(@('Tríade NFS-e | conector 0.10.1 pelo site',$(if($production){'Ambiente: PRODUÇÃO (notas reais). Histórico: LocalAppData\TriadeNfse\Conector\producao'}else{'Ambiente: produção restrita (testes).'})) + $lines + @('','Volte ao site: a tela Notas atualiza a situação de cada nota.')) -join [Environment]::NewLine
     } catch {
         $code=$_.Exception.Message;if($code -notmatch '^[A-Z0-9_]{3,40}$'){$code='UNCLASSIFIED'}
         $hint=@{LAUNCH_URL_INVALID='Link inválido. Gere de novo no site.';SITE_NOT_ALLOWED='Este link aponta para um site não autorizado. Nada foi feito.';SITE_TICKET_EXPIRED='O link expirou (15 minutos). Gere de novo no site.';CERT_NOT_FOUND='Nenhum certificado do Windows com o CNPJ do emitente foi encontrado.';CERT_NOT_SELECTED='Nenhum certificado selecionado.';SITE_MIXED_ISSUERS='O link mistura emitentes diferentes.';SITE_MIXED_ENVIRONMENTS='O link mistura produção e testes. Gere um link por ambiente.';SITE_JOB_ENVIRONMENT='Ambiente da nota inválido. Nada foi enviado.';PRODUCTION_SCHEMAS_MISSING='Este conector não tem os esquemas de produção. Baixe o conector 0.10.0 em Configurações no site.';SCHEMA_ENVIRONMENT='Esquemas incompatíveis com o ambiente. Nada foi enviado.'}[$code]

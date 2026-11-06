@@ -28,6 +28,10 @@ public sealed class TriadeFakeSite : HttpMessageHandler {
 '@
 }
 $site='https://nfse-sand.vercel.app';$ticket='T'+('a'*40)
+# 0.10.1: the official domain is accepted too; look-alike hosts are not.
+$official=Resolve-TriadeLaunchUrl -Url ('triade-nfse://assinar?site='+[Uri]::EscapeDataString('https://nfse.triade.cnt.br')+'&ticket='+$ticket)
+if($official.site -ne 'https://nfse.triade.cnt.br'){throw 'Dominio oficial nao reconhecido.'}
+foreach($fake in @('https://triade.cnt.br','https://nfse.triade.cnt.br.evil.example','https://evil-nfse.triade.cnt.br','http://nfse.triade.cnt.br')){$blocked=$false;try{$null=Resolve-TriadeLaunchUrl -Url ('triade-nfse://assinar?site='+[Uri]::EscapeDataString($fake)+'&ticket='+$ticket)}catch{$blocked=$true};if(-not $blocked){throw ('Dominio parecido aceito: '+$fake)}}
 
 # 1) The link only works for allow-listed sites, exact match, with a well-formed ticket.
 $ok=Resolve-TriadeLaunchUrl -Url ('triade-nfse://assinar?site='+[Uri]::EscapeDataString($site)+'&ticket='+$ticket)

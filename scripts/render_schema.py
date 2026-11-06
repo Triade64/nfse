@@ -26,6 +26,6 @@ for table in meta.sorted_tables:
     parts.append(f'CREATE POLICY nfse_backend ON nfse_app.{table.name} TO nfse_runtime USING (true) WITH CHECK (true);')
     for column in table.columns:
         if column.foreign_keys:parts.append(f'CREATE INDEX IF NOT EXISTS idx_{table.name}_{column.name} ON nfse_app.{table.name} ({column.name});')
-parts.extend(["GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA nfse_app TO nfse_runtime;","CREATE UNIQUE INDEX IF NOT EXISTS uq_repeat_request ON nfse_app.audit (user_id, (info->>'request_id')) WHERE action='repeat_batch';","CREATE UNIQUE INDEX IF NOT EXISTS uq_dps_active_draft ON nfse_app.dps (draft_id) WHERE status IS NULL OR status <> 'Descartada';","COMMIT;"])
+parts.extend(["GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA nfse_app TO nfse_runtime;","CREATE UNIQUE INDEX IF NOT EXISTS uq_repeat_request ON nfse_app.audit (user_id, (info->>'request_id')) WHERE action='repeat_batch';","CREATE INDEX IF NOT EXISTS idx_login_attempts_user_at ON nfse_app.login_attempts (username, at);","CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_at ON nfse_app.login_attempts (ip_hash, at);","CREATE UNIQUE INDEX IF NOT EXISTS uq_dps_active_draft ON nfse_app.dps (draft_id) WHERE status IS NULL OR status <> 'Descartada';","COMMIT;"])
 (ROOT/'database'/'schema.sql').write_text('\n\n'.join(parts),encoding='utf-8')
 print('database/schema.sql gerado; nenhuma operação remota executada.')

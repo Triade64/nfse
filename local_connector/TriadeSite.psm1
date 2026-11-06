@@ -6,7 +6,8 @@ $ErrorActionPreference='Stop'
 # Windows certificate, submits with the existing journal protections and reports the outcome back to the site.
 
 # Only these sites can hand work to this PC. A link pointing anywhere else is refused before any network call.
-$script:TriadeAllowedSites=@('https://nfse-sand.vercel.app')
+# 0.10.1: official domain nfse.triade.cnt.br (DNS at Hostinger, hosted on Vercel); the Vercel address stays during the transition.
+$script:TriadeAllowedSites=@('https://nfse.triade.cnt.br','https://nfse-sand.vercel.app')
 $script:TriadeProtocol='triade-nfse'
 
 function Get-TriadeAllowedSites { return ,@($script:TriadeAllowedSites) }

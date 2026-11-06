@@ -7,7 +7,7 @@ Objetivo: o botão **Assinar e enviar** da tela Notas abre o conector no PC, de 
 1. **Notas → Emitir** (com "Abrir o conector" marcado) ou **Assinar e enviar** (uma nota ou várias selecionadas). O site reserva o número, se ainda não tiver, e cria um **ticket**: `POST /api/connector/tickets {dps_ids}`, só para administrador e só para DPS `Reservada`/`Desconhecida`.
 2. O navegador abre `triade-nfse://assinar?site=<origem>&ticket=<token>`. O Windows inicia `ConectorTriade.ps1 -Url "<link>"`.
 3. O conector:
-   - valida o link, exigindo que o site esteja **exatamente** na lista fixa (`https://nfse-sand.vercel.app`) e que o ticket tenha formato válido;
+   - valida o link, exigindo que o site esteja **exatamente** na lista fixa (`https://nfse.triade.cnt.br` e, na transição, `https://nfse-sand.vercel.app`) e que o ticket tenha formato válido;
    - busca os trabalhos (`GET /api/connector/jobs`, com `Authorization: Bearer <ticket>`);
    - pede **uma** confirmação com emitente, tomadores, competências e valores;
    - escolhe o certificado do Windows com o CNPJ do emitente.

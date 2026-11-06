@@ -114,3 +114,14 @@ def test_restricted_result_label_cannot_report_production(admin,company,row):
     dps_id=emit(admin,make_note(admin,row)).json()['id']
     token,_=ticket(admin,[dps_id]);h=as_connector(admin,token)
     assert result(admin,h,dps_id,state='Rejeitada em produção',http_status=400,codes='E0001').status_code==409
+
+def test_test_note_does_not_block_identical_real_note(admin,company,row):
+    # 0.10.1: the duplicate check is per environment; within production it still applies.
+    put_company(admin,company,perfil_fiscal=PROFILE);series(admin,company,'2')
+    test=make_note(admin,row);assert test['situation']=='Pronta'
+    assert emit(admin,test).status_code==200
+    put_company(admin,company,perfil_fiscal=PROFILE,ambiente='1')
+    real=make_note(admin,row);assert real['situation']=='Pronta',real['errors']
+    again=make_note(admin,row);assert again['situation']=='Com inconsistência' and 'repetido' in again['errors'][0]
+    r=admin.post('/api/notes/duplicate',json={'draft_ids':[test['id']],'competencia':row['competencia'],'confirm_review':True,'request_id':'producao-duplicada-0001'})
+    assert r.status_code==409  # the real note for this competence already exists

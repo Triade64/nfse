@@ -31,6 +31,7 @@ from .security import current_user, db_session, hasher, role, allowed_company, c
 from .validation import HEADERS, REQUIRED, normalize, digits, valid_document, cell_text
 from urllib.parse import urlencode
 from .nfse_result import check_authorized_nfse
+from . import customer_import
 from .danfse import build_danfse
 from lxml import etree
 from .nbs import nbs_table, format_nbs
@@ -156,7 +157,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.11.0',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.12.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -730,6 +731,46 @@ def create_customer(data:CustomerInput,u=Depends(current_user),db=Depends(db_ses
 @app.put('/api/customers/{id}')
 def edit_customer(id:int,data:CustomerInput,u=Depends(current_user),db=Depends(db_session)):
     c=get_or_404(db,Customer,id);allowed_company(db,u,c.company_id);return save_customer(data,db,u,c)
+
+# ---- 0.12.0: customer import from a spreadsheet (template -> preview -> confirmed import)
+@app.get('/api/customers/template.xlsx')
+def customers_template(u=Depends(current_user)):
+    role(u,['admin','operator','approver'])
+    return excel_response(customer_import.template_workbook(),'modelo_tomadores.xlsx')
+
+@app.post('/api/customers/import')
+async def import_customers(file:UploadFile=File(...),confirm:bool=False,expected_sha256:str='',u=Depends(current_user),db=Depends(db_session)):
+    """Without confirm: line-by-line preview, nothing written. With confirm: the SAME file (same SHA-256 as the preview)
+    is imported all-or-nothing; any line with an error blocks the import."""
+    role(u,['admin','operator','approver'])
+    data=await file.read(customer_import.MAX_BYTES+1)
+    try:rows=customer_import.read_rows(data,file.filename or '')
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+    except Exception:raise HTTPException(422,'Não foi possível ler o arquivo. Use o modelo de tomadores.') from None
+    digest=customer_import.file_digest(data)
+    companies={c.cnpj:c.id for c in db.scalars(select(Company))}
+    ids=company_ids(db,u)
+    def existing(company_id,document):
+        return db.scalar(select(Customer).where(Customer.company_id==company_id,Customer.document==document))
+    entries=customer_import.analyze(rows,companies,lambda cid:ids is None or cid in ids,existing)
+    summary={'total':len(entries),'novos':sum(e['action']=='Novo' for e in entries),'atualizar':sum(e['action']=='Atualizar' for e in entries),
+             'erros':sum(e['action']=='Com erro' for e in entries),'avisos':sum(bool(e['warnings']) for e in entries)}
+    public=[{k:e[k] for k in ('line','cnpj_emitente','documento_tomador','nome_tomador','action','errors','warnings')} for e in entries]
+    if not confirm:return {'sha256':digest,'summary':summary,'rows':public,'imported':False}
+    if expected_sha256!=digest:raise HTTPException(409,'O arquivo mudou depois da prévia. Gere a prévia de novo.')
+    if summary['erros']:raise HTTPException(422,'Corrija as linhas com erro no arquivo; nada foi importado.')
+    if URL.startswith('sqlite'):db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+    created=updated=0
+    for e in entries:
+        c=existing(e['company_id'],e['documento_tomador'])
+        if c is None:
+            c=Customer(company_id=e['company_id'],document=e['documento_tomador'],name=e['nome_tomador'],details=customer_import.merged_details({},e));db.add(c);created+=1
+        else:
+            c.name=e['nome_tomador'];c.details=customer_import.merged_details(c.details,e);updated+=1
+    db.flush()
+    audit(db,u,'import_customers','customer',0,{'sha256':digest,'file':(file.filename or '')[:120],'created':created,'updated':updated})
+    db.commit()
+    return {'sha256':digest,'summary':summary,'rows':public,'imported':True,'created':created,'updated':updated}
 
 @app.get('/api/services')
 def services(u=Depends(current_user),db=Depends(db_session)):

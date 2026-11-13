@@ -1,5 +1,5 @@
 import React, {useEffect, useMemo, useState, type FormEvent} from 'react';
-import {Copy, Plus, Pencil, Send, Download, Trash2, Search, RefreshCw, X, Upload} from 'lucide-react';
+import {Copy, Plus, Pencil, Send, Download, Trash2, Search, RefreshCw, X} from 'lucide-react';
 import {readableError, hasInvalidValue} from './labels';
 import {WAITING, isWaiting, type NotesFilter} from './Dashboard';
 
@@ -37,9 +37,6 @@ export function Notas({api,companies,customers,services,role,initialFilter={}}:{
 
  async function run(fn:()=>Promise<void>){setBusy(true);setError('');try{await fn()}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
  async function load(){setNotes(await api('/notes'));setLoaded(true)}
- // 0.13.0: spreadsheet import straight into Notas, one independent note per row (all rows or none).
- const [importing,setImporting]=useState(false);
- async function importFile(f:File){setImporting(true);setError('');setNotice('');try{const form=new FormData();form.append('file',f);const r=await api('/import?per_note=true','POST',form);await load();setNotice(`${r.created} nota${r.created!==1?'s':''} importada${r.created!==1?'s':''}${r.with_errors?`; ${r.with_errors} com inconsistência para corrigir`:''}. Confira e emita.`)}catch(e){setError((e as Error).message)}finally{setImporting(false)}}
  useEffect(()=>{run(load)},[]);
 
  const pending=notes.filter(n=>n.dps&&waiting.includes(n.dps.id)&&(SENDABLE.includes(n.dps.status)||(needsDanfse(n)&&!n.dps.danfse_error)));
@@ -70,7 +67,7 @@ export function Notas({api,companies,customers,services,role,initialFilter={}}:{
 
  return <section className="card notes">
   <div className="sectionHead"><span/>
-   <div className="buttonRow">{canEdit&&<><a className="button" href="/api/template.xlsx" title="Modelo de planilha de notas"><Download size={16}/> Modelo</a><label className="button">{importing?'Importando…':<><Upload size={16}/> Importar planilha</>}<input hidden type="file" accept=".xlsx,.csv" disabled={importing} onChange={e=>{const f=e.target.files?.[0];if(f)importFile(f);e.target.value=''}}/></label></>}{isAdmin&&selected.some(launchable)&&<button onClick={()=>sendSelected(selected)}><Send size={16}/> Abrir conector ({selected.filter(launchable).length})</button>}{canEdit&&checked.length>0&&<button onClick={()=>openDuplicate(selected)}><Copy size={16}/> Duplicar {checked.length} selecionada{checked.length>1?'s':''}</button>}{canEdit&&<button className="primary" onClick={()=>setEditing({raw:{...blank(),cnpj_emitente:companies.length===1?companies[0].cnpj:'',municipio_ibge:companies.length===1?companies[0].config.municipio_ibge||'':''}})}><Plus size={16}/> Nova nota</button>}</div></div>
+   <div className="buttonRow">{isAdmin&&selected.some(launchable)&&<button onClick={()=>sendSelected(selected)}><Send size={16}/> Abrir conector ({selected.filter(launchable).length})</button>}{canEdit&&checked.length>0&&<button onClick={()=>openDuplicate(selected)}><Copy size={16}/> Duplicar {checked.length} selecionada{checked.length>1?'s':''}</button>}{canEdit&&<button className="primary" onClick={()=>setEditing({raw:{...blank(),cnpj_emitente:companies.length===1?companies[0].cnpj:'',municipio_ibge:companies.length===1?companies[0].config.municipio_ibge||'':''}})}><Plus size={16}/> Nova nota</button>}</div></div>
   <div className="toolbar filters"><Search size={18}/><input aria-label="Buscar notas" placeholder="Tomador, documento ou serviço" value={query} onChange={e=>setQuery(e.target.value)}/>
    <select aria-label="Filtrar empresa" value={company} onChange={e=>setCompany(e.target.value)}><option value="">Todas as empresas</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
    <select aria-label="Filtrar situação" value={situation} onChange={e=>setSituation(e.target.value)}><option value="">Todas as situações</option><option value={WAITING}>{WAITING}</option>{SITUATIONS.map(s=><option key={s}>{s}</option>)}</select>

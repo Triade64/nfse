@@ -139,7 +139,7 @@ it('production company: emitting needs the explicit real-note confirmation and s
  const api=vi.fn().mockResolvedValueOnce([ready,authorized]).mockResolvedValueOnce({last_simples_percent:'6.54'}).mockResolvedValueOnce({id:10,identifier:'DPS0002',series:'1',number:2,existing:false}).mockResolvedValueOnce([ready]);
  render(<Notas api={api} companies={prod} customers={[]} services={[]} role="admin"/>);
  await screen.findByText('CLIENTE A');
- expect(screen.getByText(/PRODUÇÃO ·/)).toBeTruthy();  // authorized real note is marked as production
+ expect(screen.getAllByText('PRODUÇÃO').length).toBe(2);  // both notes belong to a production company
  fireEvent.click(screen.getByRole('button',{name:/Emitir/}));
  const dialog=screen.getByRole('dialog');
  expect(dialog.textContent).toContain('NOTA REAL, COM VALIDADE JURÍDICA');

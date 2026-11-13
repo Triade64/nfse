@@ -157,7 +157,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.12.2',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.13.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -372,6 +372,24 @@ def tomador_address(db,company_id,document):
     if not company_id:return None
     cust=db.scalar(select(Customer).where(Customer.company_id==company_id,Customer.document==digits(document)))
     return complete_address(cust.details) if cust else None
+
+@app.get('/api/notes/report.xlsx')
+def notes_report(u=Depends(current_user),db=Depends(db_session)):
+    """0.13.0: one spreadsheet with every visible note, its situation and, when emitted, DPS and access key."""
+    notes=list_notes(u,db)
+    names={c.id:c.name for c in db.scalars(select(Company))}
+    wb=Workbook();ws=wb.active;ws.title='Notas'
+    ws.append(['Emitente','Tomador','CPF/CNPJ tomador','Competência','Valor (R$)','Serviço','Situação','Ambiente','Série DPS','Nº DPS','Chave de acesso','Inconsistências'])
+    for n in notes:
+        r,x=n['raw'],n['dps'] or {}
+        env={'1':'Produção','2':'Produção restrita'}.get(x.get('environment') or '', '')
+        ws.append([safe_cell(names.get(n['company_id'],r.get('cnpj_emitente'))),safe_cell(r.get('nome_tomador')),safe_cell(r.get('documento_tomador')),safe_cell(r.get('competencia')),
+                   (n['amount_cents']/100) if not n['errors'] else None,safe_cell(r.get('descricao_servico')),n['situation'],env,safe_cell(x.get('series')),x.get('number'),safe_cell(x.get('access_key')),safe_cell(' | '.join(n['errors']))])
+    for column,width in zip('ABCDEFGHIJKL',(34,34,18,12,12,40,18,16,10,8,52,50)):ws.column_dimensions[column].width=width
+    for cell in ws['E'][1:]:cell.number_format='#,##0.00'
+    ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+    audit(db,u,'download_notes_report','note',0,{'rows':len(notes)});db.commit()
+    return excel_response(wb,'notas.xlsx')
 
 @app.get('/api/notes')
 def list_notes(u=Depends(current_user),db=Depends(db_session)):
@@ -795,14 +813,15 @@ class NewBatch(BaseModel):
     name:str=Field(min_length=1,max_length=200)
     rows:list[dict]=Field(min_length=1,max_length=2000)
 
-def make_batch(db,u,name,rows):
+def make_batch(db,u,name,rows,commit=True):
     b=Batch(name=name,owner_id=u.id);db.add(b);db.flush()
     for i,row in enumerate(rows,2):
         if set(row)-set(HEADERS):raise HTTPException(422,'Colunas desconhecidas. Use o modelo da aplicação.')
         if any(len(str(v))>10000 for v in row.values()):raise HTTPException(422,'Célula excede 10.000 caracteres')
         d=Draft(batch_id=b.id,line=i,raw={k:cell_text(v) for k,v in row.items()})
         db.add(d)
-    db.flush();validate_batch(db,u,b);audit(db,u,'import','batch',b.id,{'rows':len(rows)});db.commit()
+    db.flush();validate_batch(db,u,b);audit(db,u,'import','batch',b.id,{'rows':len(rows)})
+    if commit:db.commit()
     return serialize(b)
 
 @app.post('/api/batches')
@@ -864,7 +883,7 @@ def update_preparation(id:int,data:PreparationInput,u=Depends(current_user),db=D
     return save_preparation(data,db,u,get_or_404(db,Batch,id,locked=True))
 
 @app.post('/api/import')
-async def import_file(file:UploadFile=File(...),u=Depends(current_user),db=Depends(db_session)):
+async def import_file(file:UploadFile=File(...),per_note:bool=False,u=Depends(current_user),db=Depends(db_session)):
     role(u,['admin','operator','approver'])
     data=await file.read(8*1024*1024+1)
     if len(data)>8*1024*1024:raise HTTPException(413,'Arquivo maior que 8 MB')
@@ -903,6 +922,14 @@ async def import_file(file:UploadFile=File(...),u=Depends(current_user),db=Depen
         # No file content in errors; return known parsing messages only.
         message=str(e) if isinstance(e,ValueError) else 'Não foi possível ler o arquivo. Verifique o formato.'
         raise HTTPException(422,message)
+    if per_note:
+        # 0.13.0 (tela Notas): one note per row, each in its own batch, so emitting one never locks the others.
+        # All rows are created in one transaction: either the whole file becomes notes or nothing does.
+        base=Path(name).stem[:150]
+        created=[make_batch(db,u,f'{base} · linha {i}',[row],commit=False)['id'] for i,row in enumerate(rows,2)]
+        db.commit()
+        drafts=list(db.scalars(select(Draft).where(Draft.batch_id.in_(created))))
+        return {'created':len(created),'with_errors':sum(bool(d.errors) for d in drafts)}
     return make_batch(db,u,Path(name).name[:200],rows)
 
 @app.delete('/api/drafts/{id}')

@@ -1,5 +1,7 @@
 import React, {useEffect, useMemo, useState, type FormEvent} from 'react';
-import {Copy, Plus, Pencil, Send, Download, Trash2, Search, RefreshCw, X} from 'lucide-react';
+import {Copy, Plus, Pencil, Send, Download, Trash2, Search, RefreshCw, X, Upload} from 'lucide-react';
+import {readableError, hasInvalidValue} from './labels';
+import {WAITING, isWaiting, type NotesFilter} from './Dashboard';
 
 type Data=Record<string,any>;
 type Api=(path:string,method?:string,data?:any)=>Promise<any>;
@@ -20,9 +22,9 @@ function Dialog({title,close,children}:{title:string;close:()=>void;children:Rea
  return <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button className="icon" onClick={close} aria-label="Fechar"><X size={20}/></button></header>{children}</section></div>;
 }
 
-export function Notas({api,companies,customers,services,role}:{api:Api;companies:Data[];customers:Data[];services:Data[];role:string}){
+export function Notas({api,companies,customers,services,role,initialFilter={}}:{api:Api;companies:Data[];customers:Data[];services:Data[];role:string;initialFilter?:NotesFilter}){
  const [notes,setNotes]=useState<Note[]>([]),[loaded,setLoaded]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
- const [query,setQuery]=useState(''),[company,setCompany]=useState(''),[situation,setSituation]=useState(''),[month,setMonth]=useState('');
+ const [query,setQuery]=useState(''),[company,setCompany]=useState(''),[situation,setSituation]=useState(initialFilter.situation||''),[month,setMonth]=useState(initialFilter.month||''),[environment,setEnvironment]=useState('');
  const [checked,setChecked]=useState<number[]>([]);
  const [dup,setDup]=useState<Note[]|null>(null),[dupDate,setDupDate]=useState(''),[dupOk,setDupOk]=useState(false),[requestId,setRequestId]=useState(()=>crypto.randomUUID());
  const [emitting,setEmitting]=useState<Note|null>(null),[emitOk,setEmitOk]=useState(false),[realOk,setRealOk]=useState(false),[percent,setPercent]=useState(''),[openConnector,setOpenConnector]=useState(true);
@@ -35,12 +37,17 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
 
  async function run(fn:()=>Promise<void>){setBusy(true);setError('');try{await fn()}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
  async function load(){setNotes(await api('/notes'));setLoaded(true)}
+ // 0.13.0: spreadsheet import straight into Notas, one independent note per row (all rows or none).
+ const [importing,setImporting]=useState(false);
+ async function importFile(f:File){setImporting(true);setError('');setNotice('');try{const form=new FormData();form.append('file',f);const r=await api('/import?per_note=true','POST',form);await load();setNotice(`${r.created} nota${r.created!==1?'s':''} importada${r.created!==1?'s':''}${r.with_errors?`; ${r.with_errors} com inconsistência para corrigir`:''}. Confira e emita.`)}catch(e){setError((e as Error).message)}finally{setImporting(false)}}
  useEffect(()=>{run(load)},[]);
 
  const pending=notes.filter(n=>n.dps&&waiting.includes(n.dps.id)&&(SENDABLE.includes(n.dps.status)||(needsDanfse(n)&&!n.dps.danfse_error)));
  useEffect(()=>{if(!waiting.length)return;const started=Date.now();const timer=setInterval(()=>{if(Date.now()-started>15*60*1000){setWaiting([]);return}load().catch(()=>{})},5000);return()=>clearInterval(timer)},[waiting]);
  useEffect(()=>{if(waiting.length&&notes.length&&!pending.length){const done=notes.filter(n=>n.dps&&waiting.includes(n.dps.id));const ok=done.filter(n=>n.dps!.status==='Autorizada').length;setWaiting([]);setNotice(`Conector concluiu: ${ok} autorizada${ok!==1?'s':''}, ${done.length-ok} com outro resultado. Confira cada linha.`)}},[notes]);
- const visible=useMemo(()=>notes.filter(n=>(!company||String(n.company_id)===company)&&(!situation||n.situation===situation)&&(!month||n.raw.competencia?.startsWith(month))&&(!query||(n.raw.nome_tomador+' '+n.raw.documento_tomador+' '+n.raw.descricao_servico).toLowerCase().includes(query.toLowerCase()))),[notes,company,situation,month,query]);
+ // Environment of a note: its DPS when emitted, otherwise the company's current choice.
+ const envOf=(n:Note)=>n.dps?.environment||(companyOf(n.company_id)?.config.ambiente==='1'?'1':'2');
+ const visible=useMemo(()=>notes.filter(n=>(!company||String(n.company_id)===company)&&(!situation||(situation===WAITING?isWaiting(n):n.situation===situation))&&(!environment||envOf(n)===environment)&&(!month||n.raw.competencia?.startsWith(month))&&(!query||(n.raw.nome_tomador+' '+n.raw.documento_tomador+' '+n.raw.descricao_servico).toLowerCase().includes(query.toLowerCase()))),[notes,company,situation,month,query,environment,companies]);
  const selected=notes.filter(n=>checked.includes(n.id));
 
  async function launch(ids:number[]){const t=await api('/connector/tickets','POST',{dps_ids:ids});setWaiting(ids);setLaunchUrl(t.url);window.location.href=t.url}
@@ -62,21 +69,22 @@ export function Notas({api,companies,customers,services,role}:{api:Api;companies
  let taxes:Data={};try{taxes=JSON.parse(editing?.raw.retencoes||'{}')||{}}catch{taxes={}}
 
  return <section className="card notes">
-  <div className="sectionHead"><div><h2>Notas</h2><p>Todas as notas em um só lugar. Duplique as do mês anterior, confira e emita.</p></div>
-   <div className="buttonRow">{isAdmin&&selected.some(launchable)&&<button onClick={()=>sendSelected(selected)}><Send size={16}/> Abrir conector ({selected.filter(launchable).length})</button>}{canEdit&&checked.length>0&&<button onClick={()=>openDuplicate(selected)}><Copy size={16}/> Duplicar {checked.length} selecionada{checked.length>1?'s':''}</button>}{canEdit&&<button className="primary" onClick={()=>setEditing({raw:{...blank(),cnpj_emitente:companies.length===1?companies[0].cnpj:'',municipio_ibge:companies.length===1?companies[0].config.municipio_ibge||'':''}})}><Plus size={16}/> Nova nota</button>}</div></div>
+  <div className="sectionHead"><span/>
+   <div className="buttonRow">{canEdit&&<><a className="button" href="/api/template.xlsx" title="Modelo de planilha de notas"><Download size={16}/> Modelo</a><label className="button">{importing?'Importando…':<><Upload size={16}/> Importar planilha</>}<input hidden type="file" accept=".xlsx,.csv" disabled={importing} onChange={e=>{const f=e.target.files?.[0];if(f)importFile(f);e.target.value=''}}/></label></>}{isAdmin&&selected.some(launchable)&&<button onClick={()=>sendSelected(selected)}><Send size={16}/> Abrir conector ({selected.filter(launchable).length})</button>}{canEdit&&checked.length>0&&<button onClick={()=>openDuplicate(selected)}><Copy size={16}/> Duplicar {checked.length} selecionada{checked.length>1?'s':''}</button>}{canEdit&&<button className="primary" onClick={()=>setEditing({raw:{...blank(),cnpj_emitente:companies.length===1?companies[0].cnpj:'',municipio_ibge:companies.length===1?companies[0].config.municipio_ibge||'':''}})}><Plus size={16}/> Nova nota</button>}</div></div>
   <div className="toolbar filters"><Search size={18}/><input aria-label="Buscar notas" placeholder="Tomador, documento ou serviço" value={query} onChange={e=>setQuery(e.target.value)}/>
    <select aria-label="Filtrar empresa" value={company} onChange={e=>setCompany(e.target.value)}><option value="">Todas as empresas</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
-   <select aria-label="Filtrar situação" value={situation} onChange={e=>setSituation(e.target.value)}><option value="">Todas as situações</option>{SITUATIONS.map(s=><option key={s}>{s}</option>)}</select>
+   <select aria-label="Filtrar situação" value={situation} onChange={e=>setSituation(e.target.value)}><option value="">Todas as situações</option><option value={WAITING}>{WAITING}</option>{SITUATIONS.map(s=><option key={s}>{s}</option>)}</select>
+   <select aria-label="Filtrar ambiente" value={environment} onChange={e=>setEnvironment(e.target.value)}><option value="">Todos os ambientes</option><option value="1">Produção (notas reais)</option><option value="2">Testes</option></select>
    <label className="inlineLabel">Competência<input aria-label="Filtrar competência" type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label>
    <button aria-label="Atualizar lista" disabled={busy} onClick={()=>run(load)}><RefreshCw size={16}/></button></div>
   {notice&&<div className="success" role="status">{notice}</div>}{pending.length>0&&<div className="warning" role="note">Aguardando o conector para {pending.length} nota{pending.length>1?'s':''}. Se o conector não abriu, instale-o e ative a abertura pelo site em Configurações{launchUrl&&<>, ou <a href={launchUrl}>clique aqui para abrir de novo</a></>}. A lista atualiza sozinha.</div>}{error&&!dup&&!emitting&&!discarding&&!editing&&<div className="error" role="alert">{error}</div>}
-  {loaded&&<div className="resultsTotal">{visible.length} nota{visible.length!==1?'s':''} <strong>{money(visible.reduce((s,n)=>s+n.amount_cents,0))}</strong></div>}
+  {loaded&&<div className="resultsTotal">{visible.length} nota{visible.length!==1?'s':''} <strong>{money(visible.filter(n=>!hasInvalidValue(n.errors)).reduce((s,n)=>s+n.amount_cents,0))}</strong></div>}
   <div className="tableWrap"><table><thead><tr><th><input type="checkbox" aria-label="Selecionar todas as notas visíveis" checked={visible.length>0&&visible.every(n=>checked.includes(n.id))} onChange={e=>setChecked(e.target.checked?visible.map(n=>n.id):[])}/></th><th>Tomador / serviço</th><th>Empresa</th><th>Competência</th><th>Valor</th><th>Situação</th><th>Ações</th></tr></thead>
   <tbody>{visible.map(n=><tr key={n.id}>
    <td><input type="checkbox" aria-label={'Selecionar '+n.raw.nome_tomador} checked={checked.includes(n.id)} onChange={e=>setChecked(prev=>e.target.checked?[...prev,n.id]:prev.filter(id=>id!==n.id))}/></td>
    <td><strong>{n.raw.nome_tomador||'Tomador não informado'}</strong><small>{n.raw.descricao_servico}</small>{n.raw.codigo_nbs&&<small>NBS {fmtNbs(n.raw.codigo_nbs)}</small>}</td>
-   <td>{companyOf(n.company_id)?.name||n.raw.cnpj_emitente}</td><td>{dateBR(n.raw.competencia)}</td><td>{money(n.amount_cents)}</td>
-   <td><span className={'badge '+tone(n.situation)}>{n.situation}</span>{n.dps&&<small>{n.dps.environment==='1'?<strong className="prodTag">PRODUÇÃO · </strong>:'Teste · '}Série {n.dps.series} · nº {n.dps.number}</small>}{n.dps?.access_key&&<small title={n.dps.access_key}>Chave …{String(n.dps.access_key).slice(-12)}</small>}{n.dps?.status==='Rejeitada'&&n.dps.result?.codes&&<small className="rowError">SEFIN: {n.dps.result.codes}</small>}{needsDanfse(n)&&n.dps?.danfse_error&&<small className="rowError">DANFSe pendente ({n.dps.danfse_error})</small>}{waiting.includes(n.dps?.id)&&n.dps&&SENDABLE.includes(n.dps.status)&&<small>Aguardando o conector…</small>}{n.errors.map(s=><small className="rowError" key={s}>{s}</small>)}{n.address_missing&&!n.dps&&<small className="rowError">Tomador com CNPJ sem endereço completo (E0235). Complete em Tomadores antes de emitir.</small>}</td>
+   <td>{companyOf(n.company_id)?.name||n.raw.cnpj_emitente}</td><td>{dateBR(n.raw.competencia)}</td><td>{hasInvalidValue(n.errors)?<span className="muted" title="Valor inválido">—</span>:money(n.amount_cents)}</td>
+   <td><span className={'badge '+tone(n.situation)}>{n.situation}</span>{envOf(n)==='1'?<span className="badge envTag prod" title="Nota real, com validade jurídica">PRODUÇÃO</span>:<span className="badge envTag" title="Produção restrita, sem validade jurídica">TESTE</span>}{n.dps&&<small>DPS série {n.dps.series} · nº {n.dps.number}</small>}{n.dps?.access_key&&<small title={n.dps.access_key}>Chave …{String(n.dps.access_key).slice(-12)}</small>}{n.dps?.status==='Rejeitada'&&n.dps.result?.codes&&<small className="rowError">SEFIN: {n.dps.result.codes}</small>}{needsDanfse(n)&&n.dps?.danfse_error&&<small className="rowError">DANFSe pendente ({n.dps.danfse_error})</small>}{waiting.includes(n.dps?.id)&&n.dps&&SENDABLE.includes(n.dps.status)&&<small>Aguardando o conector…</small>}{n.errors.map(s=><small className="rowError" key={s}>{readableError(s)}</small>)}{n.address_missing&&!n.dps&&<small className="rowError">Tomador com CNPJ sem endereço completo (E0235). Complete em Tomadores antes de emitir.</small>}</td>
    <td><div className="entryActions">
     {canEdit&&n.editable&&<button className="textBtn" onClick={()=>{setEditing({note:n,raw:{...blank(),...n.raw}});setNotice('')}}><Pencil size={15}/> Editar</button>}
     {canEdit&&<button className="textBtn" onClick={()=>openDuplicate([n])}><Copy size={15}/> Duplicar</button>}

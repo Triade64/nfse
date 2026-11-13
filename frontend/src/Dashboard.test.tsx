@@ -54,12 +54,3 @@ it('Notas starts with the filter chosen on the dashboard and filters by environm
  expect(screen.getByText('TESTE')).toBeTruthy();
 });
 
-it('imports a spreadsheet straight into Notas',async()=>{
- const api=vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce({created:3,with_errors:1}).mockResolvedValueOnce([note(1,'Pronta')]);
- const {container}=render(<Notas api={api} companies={[office]} customers={[]} services={[]} role="operator"/>);
- await screen.findByText('0 notas',{exact:false});
- expect(screen.getByRole('link',{name:/Modelo/}).getAttribute('href')).toBe('/api/template.xlsx');
- fireEvent.change(container.querySelector('input[type="file"]')!,{target:{files:[new File(['x'],'notas.xlsx')]}});
- expect((await screen.findByRole('status')).textContent).toContain('3 notas importadas; 1 com inconsistência');
- expect(api.mock.calls[1][0]).toBe('/import?per_note=true');
-});

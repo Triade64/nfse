@@ -5,11 +5,13 @@ on:
     paths:
       - 'local_connector/**'
       - 'schemas/restricted-20261020/**'
+      - 'schemas/production-20260209/**'
       - '.github/workflows/local-connector.yml'
   pull_request:
     paths:
       - 'local_connector/**'
       - 'schemas/restricted-20261020/**'
+      - 'schemas/production-20260209/**'
       - '.github/workflows/local-connector.yml'
 permissions:
   contents: read

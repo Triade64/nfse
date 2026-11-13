@@ -157,7 +157,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.12.1',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.12.2',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')

@@ -77,3 +77,25 @@ it('emitting for Lucro Presumido asks the federal, state and municipal percentag
  fireEvent.submit(within(dialog).getByRole('button',{name:/Reservar e baixar XML/}).closest('form')!);
  await waitFor(()=>expect(call.mock.calls[2]).toEqual(['/notes/7/emit','POST',{batch_revision:4,expected_raw:raw,confirm:true,tot_fed:'13.50',tot_est:'0.00',tot_mun:'2.00'}]));
 });
+
+it('PIS/COFINS: rates follow the regime and disappear for the Simples',async()=>{
+ render(<Harness kind="company" initial={{name:'X',cnpj:'11222333000181',config:{municipio_ibge:'4205704'}}}/>);
+ fireEvent.click(screen.getByRole('radio',{name:/Lucro Presumido/}));
+ fireEvent.change(screen.getByLabelText(/^PIS\/COFINS na nota/),{target:{value:'show'}});
+ expect(state().config.perfil_fiscal).toMatchObject({pis_cofins:true,aliq_pis:'0.65',aliq_cofins:'3.00'});
+ fireEvent.click(screen.getByRole('radio',{name:/Lucro Real/}));
+ expect(state().config.perfil_fiscal).toMatchObject({pis_cofins:true,aliq_pis:'1.65',aliq_cofins:'7.60'});
+ fireEvent.click(screen.getByRole('radio',{name:/Simples Nacional/}));
+ expect(state().config.perfil_fiscal).toMatchObject({pis_cofins:false,aliq_pis:null,aliq_cofins:null});
+ expect(screen.queryByLabelText(/^PIS\/COFINS na nota/)).toBeNull();
+});
+
+it('emission shows the PIS/COFINS that will be highlighted',async()=>{
+ const lp={id:1,cnpj:'11222333000181',name:'EMPRESA LP',config:{municipio_ibge:'4205704',perfil_fiscal:{series:'1',op_simp_nac:'1',reg_ap_trib_sn:null,reg_esp_trib:'0',totals_mode:'percentages',include_provider_im:false,include_iss_rate:false,pis_cofins:true,aliq_pis:'0.65',aliq_cofins:'3.00'}}};
+ const note={id:7,batch_id:3,batch_revision:4,company_id:1,raw:{cnpj_emitente:'11222333000181',nome_tomador:'CLIENTE A',documento_tomador:'52998224725',competencia:'2026-11-01',descricao_servico:'SERVICO',valor_servico:'1234.56'},errors:[],amount_cents:123456,situation:'Pronta',dps:null,editable:true};
+ const call=vi.fn().mockResolvedValueOnce([note]).mockResolvedValueOnce({last_simples_percent:null,last_percentages:null});
+ render(<Notas api={call} companies={[lp]} customers={[]} services={[]} role="admin"/>);
+ fireEvent.click(await screen.findByRole('button',{name:/Emitir/}));
+ const text=screen.getByRole('dialog').textContent||'';
+ expect(text).toMatch(/PIS 0,65% = R\$\s8,02/);expect(text).toMatch(/COFINS 3,00% = R\$\s37,04/);expect(text).toContain('não retidos');
+});

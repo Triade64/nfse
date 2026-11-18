@@ -15,7 +15,7 @@ export function CompanyForm({api,value,onChange,isAdmin}:{api:Api;value:Row;onCh
  const setConfig=(patch:Row)=>onChange({...value,config:{...config,...patch}});
  const doc=documentStatus(value.cnpj||'');
  const regime=REGIMES.find(r=>r.value===config.regime);
- function chooseRegime(v:string){const r=REGIMES.find(x=>x.value===v);if(!r)return;setConfig({regime:r.value,perfil_fiscal:profileForRegime(r.op,config.perfil_fiscal)})}
+ function chooseRegime(v:string){const r=REGIMES.find(x=>x.value===v);if(!r)return;setConfig({regime:r.value,perfil_fiscal:profileForRegime(r.op,config.perfil_fiscal,r.value)})}
  return <div className="wide guidedForm">
   <fieldset><legend>1. Identificação</legend><div className="formGrid">
    <label>CNPJ<input required inputMode="numeric" value={value.cnpj||''} disabled={!!value.id} onChange={e=>set({cnpj:e.target.value})} onBlur={e=>doc.ok&&set({cnpj:formatDocument(e.target.value)})} aria-invalid={!!value.cnpj&&!(doc.ok&&doc.kind==='cnpj')}/>{value.id?<small>O CNPJ não muda depois do cadastro.</small>:value.cnpj&&<small className={doc.ok&&doc.kind==='cnpj'?'okText':'rowError'}>{doc.kind==='cpf'?'Informe o CNPJ da empresa (não CPF).':doc.message}</small>}</label>
@@ -31,7 +31,7 @@ export function CompanyForm({api,value,onChange,isAdmin}:{api:Api;value:Row;onCh
    <div className="regimeOptions" role="radiogroup" aria-label="Regime tributário">{REGIMES.map(r=><label key={r.value} className={'regimeOption'+(config.regime===r.value?' selected':'')}><input type="radio" name="regime" required checked={config.regime===r.value} onChange={()=>chooseRegime(r.value)}/><strong>{r.label}</strong><small>{r.hint}</small></label>)}</div>
    {config.regime&&!regime&&<p className="rowError">Regime antigo "{config.regime}": escolha uma das opções acima.</p>}
   </fieldset>
-  {config.perfil_fiscal&&<details className="advanced" open={!value.id}><summary>4. Ajustes da emissão (série, inscrição e alíquota no XML)</summary><FiscalProfileFields hideRegime value={config.perfil_fiscal} onChange={p=>setConfig(p?{perfil_fiscal:p}:{perfil_fiscal:null,ambiente:'2'})}/></details>}
+  {config.perfil_fiscal&&<details className="advanced" open={!value.id}><summary>4. Ajustes da emissão (série, inscrição e alíquota no XML)</summary><FiscalProfileFields hideRegime regime={config.regime} value={config.perfil_fiscal} onChange={p=>setConfig(p?{perfil_fiscal:p}:{perfil_fiscal:null,ambiente:'2'})}/></details>}
   {isAdmin&&<EnvironmentField value={config.ambiente} hasProfile={!!config.perfil_fiscal} onChange={v=>setConfig({ambiente:v})}/>}
   <details className="advanced"><summary>Outras informações (opcional, não vão para a nota)</summary><div className="formGrid">{Object.entries(OTHER).map(([k,label])=><label key={k}>{label}<input value={config[k]||''} onChange={e=>setConfig({[k]:e.target.value})}/></label>)}</div></details>
  </div>;

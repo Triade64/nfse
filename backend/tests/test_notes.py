@@ -188,3 +188,19 @@ def test_nbs_list_endpoint_and_old_template_without_nbs_column(admin,company,row
     buf=_io.StringIO();w=csv.DictWriter(buf,fieldnames=old,delimiter=';');w.writeheader();w.writerow({k:row[k] for k in old})
     r=admin.post('/api/import',files={'file':('antigo.csv',buf.getvalue().encode('utf-8'),'text/csv')})
     assert r.status_code==200,r.text
+
+def test_pis_cofins_own_assessment_is_shown_not_retained(admin,company,row):
+    # 0.15.0: non-optant highlights PIS/COFINS of its own assessment; CST 01 and tpRetPisCofins 0 (not retained).
+    lp={**PROFILE,'op_simp_nac':'1','reg_ap_trib_sn':None,'pis_cofins':True,'aliq_pis':'0.65','aliq_cofins':'3.00'}
+    assert set_profile(admin,company,{**PROFILE,'pis_cofins':True,'aliq_pis':'0.65','aliq_cofins':'3.00'}).status_code==422  # Simples: not allowed
+    assert set_profile(admin,company,{**lp,'aliq_cofins':None}).status_code==422
+    assert set_profile(admin,company,{**lp,'pis_cofins':False}).status_code==422  # rates without the option
+    r=set_profile(admin,company,lp);assert r.status_code==200 and r.json()['config']['perfil_fiscal']['aliq_pis']=='0.65'
+    admin.put(f'/api/companies/{company["id"]}/dps-series',json={'series':'1','next_number':1,'expected_revision':None,'confirm_unused':True})
+    n=note(admin,row)  # valor 1.234,56
+    r=emit(admin,n,simples_percent=None,tot_fed='13.45',tot_est='0',tot_mun='2');assert r.status_code==200,r.text
+    xml=etree.fromstring(admin.get(f'/api/dps/{r.json()["id"]}/xml').content)
+    group=xml.find('.//{*}tribFed/{*}piscofins')
+    assert [(etree.QName(e).localname,e.text) for e in group]==[('CST','01'),('vBCPisCofins','1234.56'),('pAliqPis','0.65'),('pAliqCofins','3.00'),('vPis','8.02'),('vCofins','37.04'),('tpRetPisCofins','0')]
+    trib=xml.find('.//{*}valores/{*}trib')
+    assert [etree.QName(e).localname for e in trib]==['tribMun','tribFed','totTrib']

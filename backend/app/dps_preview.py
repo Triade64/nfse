@@ -2,7 +2,7 @@
 No signing or submission: the XML is signed and sent by the local connector."""
 from functools import lru_cache
 from datetime import datetime, timezone, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Literal
 import json
@@ -26,6 +26,14 @@ ENVIRONMENT_NAMES = {RESTRICTED: 'produção restrita (testes)', PRODUCTION: 'pr
 SERIES_PATTERN = r'^0{0,4}([1-9][0-9]{0,3}|[1-4][0-9]{4})$'
 BRASILIA = timezone(timedelta(hours=-3))
 
+def _check_pis_cofins(m):
+    # 0.15.0: own-assessment PIS/COFINS shown on the note, never retained (tpRetPisCofins 0). Non-optants only.
+    if m.pis_cofins:
+        if m.op_simp_nac != '1' or m.aliq_pis is None or m.aliq_cofins is None:
+            raise ValueError('Destaque de PIS/COFINS: somente para não optante do Simples, com as duas alíquotas.')
+    elif m.aliq_pis is not None or m.aliq_cofins is not None:
+        raise ValueError('Alíquotas de PIS/COFINS informadas sem o destaque ativado.')
+
 class FiscalChoices(BaseModel):
     """Explicit tax choices confirmed by a person; nothing here is inferred or defaulted."""
     model_config = ConfigDict(extra='forbid')
@@ -40,11 +48,15 @@ class FiscalChoices(BaseModel):
     tot_mun: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=2)
     include_provider_im: bool
     include_iss_rate: bool
+    pis_cofins: bool = False
+    aliq_pis: Decimal | None = Field(default=None, gt=0, le=100, decimal_places=2)
+    aliq_cofins: Decimal | None = Field(default=None, gt=0, le=100, decimal_places=2)
 
     @model_validator(mode='after')
     def coherent(self):
         if (self.op_simp_nac == '3') != (self.reg_ap_trib_sn is not None):
             raise ValueError('Informe o regime de apuração somente para ME/EPP optante pelo SN.')
+        _check_pis_cofins(self)
         percentages = (self.tot_fed, self.tot_est, self.tot_mun)
         if self.totals_mode == 'percentages':
             # Rule E0713: a non-optant can neither omit the estimate (indTotTrib) nor use the Simples percentage.
@@ -100,6 +112,10 @@ class FiscalProfile(BaseModel):
     include_provider_im: bool
     include_iss_rate: bool
     series: str = Field(pattern=SERIES_PATTERN)
+    # 0.15.0: rates live in the profile (Lucro Presumido 0.65/3.00, Lucro Real 1.65/7.60); values are computed per note.
+    pis_cofins: bool = False
+    aliq_pis: Decimal | None = Field(default=None, gt=0, le=100, decimal_places=2)
+    aliq_cofins: Decimal | None = Field(default=None, gt=0, le=100, decimal_places=2)
 
     @model_validator(mode='before')
     @classmethod
@@ -117,6 +133,7 @@ class FiscalProfile(BaseModel):
     def coherent(self):
         if (self.op_simp_nac == '3') != (self.reg_ap_trib_sn is not None):
             raise ValueError('Informe o regime de apuração somente para ME/EPP optante pelo SN.')
+        _check_pis_cofins(self)
         expected = {'3': 'simples_percent', '1': 'percentages', '2': 'not_informed'}[self.op_simp_nac]
         if self.totals_mode != expected:
             raise ValueError('Tributos aproximados: ME/EPP informa o percentual do Simples (E0712); não optante informa os percentuais federal, estadual e municipal (E0713); MEI não informa.')
@@ -237,6 +254,16 @@ def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj
     tax=add(values,'trib');municipal=add(tax,'tribMun')
     add(municipal,'tribISSQN','1');add(municipal,'tpRetISSQN','1')
     if options.include_iss_rate:add(municipal,'pAliq',row['iss_aliquota'])
+    if options.pis_cofins:
+        # Base = service value (no deductions in this generator; rule E0677). Values = base x rate (E0694/E0696).
+        base=Decimal(row['valor_servico']);cents=Decimal('0.01')
+        group=add(add(tax,'tribFed'),'piscofins')
+        add(group,'CST','01')  # taxable operation at the basic rate
+        add(group,'vBCPisCofins',format(base,'.2f'))
+        add(group,'pAliqPis',format(options.aliq_pis,'.2f'));add(group,'pAliqCofins',format(options.aliq_cofins,'.2f'))
+        add(group,'vPis',format((base*options.aliq_pis/100).quantize(cents,ROUND_HALF_UP),'.2f'))
+        add(group,'vCofins',format((base*options.aliq_cofins/100).quantize(cents,ROUND_HALF_UP),'.2f'))
+        add(group,'tpRetPisCofins','0')  # PIS/COFINS/CSLL not retained
     total=add(tax,'totTrib')
     if options.totals_mode=='not_informed':add(total,'indTotTrib','0')
     elif options.totals_mode=='percentages':

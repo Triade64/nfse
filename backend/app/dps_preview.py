@@ -32,8 +32,12 @@ class FiscalChoices(BaseModel):
     op_simp_nac: Literal['1','2','3']
     reg_ap_trib_sn: Literal['1','2','3'] | None
     reg_esp_trib: Literal['0','1','2','3','4','5','6','9']
-    totals_mode: Literal['not_informed','simples_percent']
+    totals_mode: Literal['not_informed','simples_percent','percentages']
     simples_percent: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=2)
+    # 0.14.0: approximate total of taxes for non-optants (Lucro Presumido/Real), Lei 12.741 (e.g. IBPT table).
+    tot_fed: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=2)
+    tot_est: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=2)
+    tot_mun: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=2)
     include_provider_im: bool
     include_iss_rate: bool
 
@@ -41,6 +45,16 @@ class FiscalChoices(BaseModel):
     def coherent(self):
         if (self.op_simp_nac == '3') != (self.reg_ap_trib_sn is not None):
             raise ValueError('Informe o regime de apuração somente para ME/EPP optante pelo SN.')
+        percentages = (self.tot_fed, self.tot_est, self.tot_mun)
+        if self.totals_mode == 'percentages':
+            # Rule E0713: a non-optant can neither omit the estimate (indTotTrib) nor use the Simples percentage.
+            if self.op_simp_nac != '1' or any(p is None for p in percentages) or self.simples_percent is not None:
+                raise ValueError('Percentuais federal, estadual e municipal são exclusivos de não optante do Simples e precisam ser informados os três.')
+            return self
+        if any(p is not None for p in percentages):
+            raise ValueError('Percentuais federal/estadual/municipal informados fora da opção de não optante.')
+        if self.op_simp_nac == '1':
+            raise ValueError('Não optante do Simples deve informar os percentuais aproximados federal, estadual e municipal (regra E0713).')
         if self.totals_mode == 'simples_percent':
             if self.op_simp_nac != '3' or self.simples_percent is None:
                 raise ValueError('Percentual SN exige ME/EPP optante e percentual explícito.')
@@ -82,7 +96,7 @@ class FiscalProfile(BaseModel):
     op_simp_nac: Literal['1','2','3']
     reg_ap_trib_sn: Literal['1','2','3'] | None
     reg_esp_trib: Literal['0','1','2','3','4','5','6','9']
-    totals_mode: Literal['not_informed','simples_percent']
+    totals_mode: Literal['not_informed','simples_percent','percentages']
     include_provider_im: bool
     include_iss_rate: bool
     series: str = Field(pattern=SERIES_PATTERN)
@@ -92,26 +106,34 @@ class FiscalProfile(BaseModel):
     def drop_legacy_percent(cls, data):
         # Profiles saved by 0.7.0 carried a fixed percentage; it is ignored from 0.7.1 on.
         if isinstance(data, dict):
-            data = {k: v for k, v in data.items() if k != 'simples_percent'}
-            # Only one value is legal per regime (E0712), so a 0.7.0 profile saved as "not_informed" is brought forward.
+            data = {k: v for k, v in data.items() if k not in ('simples_percent', 'tot_fed', 'tot_est', 'tot_mun')}
+            # Only one value is legal per regime: ME/EPP -> Simples percentage (E0712); non-optant -> federal/state/
+            # municipal percentages (E0713, 0.14.0); MEI -> not informed. Older saved profiles are brought forward.
             if data.get('op_simp_nac') in ('1', '2', '3'):
-                data['totals_mode'] = 'simples_percent' if data['op_simp_nac'] == '3' else 'not_informed'
+                data['totals_mode'] = {'3': 'simples_percent', '1': 'percentages', '2': 'not_informed'}[data['op_simp_nac']]
         return data
 
     @model_validator(mode='after')
     def coherent(self):
         if (self.op_simp_nac == '3') != (self.reg_ap_trib_sn is not None):
             raise ValueError('Informe o regime de apuração somente para ME/EPP optante pelo SN.')
-        if (self.op_simp_nac == '3') != (self.totals_mode == 'simples_percent'):
-            raise ValueError('ME/EPP optante pelo SN informa o percentual do Simples a cada emissão (E0712); demais regimes não informam estimativa.')
+        expected = {'3': 'simples_percent', '1': 'percentages', '2': 'not_informed'}[self.op_simp_nac]
+        if self.totals_mode != expected:
+            raise ValueError('Tributos aproximados: ME/EPP informa o percentual do Simples (E0712); não optante informa os percentuais federal, estadual e municipal (E0713); MEI não informa.')
         return self
 
-    def choices(self, simples_percent):
-        """Fiscal choices for one emission; the percentage is required exactly when the profile asks for it."""
+    def choices(self, simples_percent, percentages=None):
+        """Fiscal choices for one emission; the percentages are required exactly when the profile asks for them."""
         if (self.totals_mode == 'simples_percent') != (simples_percent is not None):
             raise ValueError('Informe o percentual aproximado do Simples desta emissão.' if self.totals_mode == 'simples_percent' else 'Esta empresa não informa percentual do Simples.')
+        fed, est, mun = percentages or (None, None, None)
+        if self.totals_mode == 'percentages':
+            if None in (fed, est, mun):
+                raise ValueError('Informe os percentuais aproximados de tributos federais, estaduais e municipais desta emissão.')
+        elif any(p is not None for p in (fed, est, mun)):
+            raise ValueError('Esta empresa não informa percentuais federal, estadual e municipal.')
         data = self.model_dump(exclude={'series'})
-        return {**data, 'simples_percent': simples_percent}
+        return {**data, 'simples_percent': simples_percent, 'tot_fed': fed, 'tot_est': est, 'tot_mun': mun}
 
 def check_instant(issued_at: datetime):
     if issued_at.utcoffset() is None:
@@ -217,6 +239,9 @@ def build_dps(raw: dict, company: dict, options: FiscalChoices, own_company_cnpj
     if options.include_iss_rate:add(municipal,'pAliq',row['iss_aliquota'])
     total=add(tax,'totTrib')
     if options.totals_mode=='not_informed':add(total,'indTotTrib','0')
+    elif options.totals_mode=='percentages':
+        group=add(total,'pTotTrib')
+        add(group,'pTotTribFed',format(options.tot_fed,'.2f'));add(group,'pTotTribEst',format(options.tot_est,'.2f'));add(group,'pTotTribMun',format(options.tot_mun,'.2f'))
     else:add(total,'pTotTribSN',format(options.simples_percent,'.2f'))
     xml=etree.tostring(root,encoding='UTF-8',xml_declaration=True,pretty_print=False)
     try:validate_dps(xml,environment)

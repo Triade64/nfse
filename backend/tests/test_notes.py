@@ -88,24 +88,34 @@ def test_simples_percent_is_required_per_emission_and_prefilled_from_last_use(ad
     r=set_profile(admin,company,{**PROFILE,'totals_mode':'not_informed','simples_percent':'6.00'})
     assert r.status_code==200 and r.json()['config']['perfil_fiscal']['totals_mode']=='simples_percent' and 'simples_percent' not in r.json()['config']['perfil_fiscal']
     admin.put(f'/api/companies/{company["id"]}/dps-series',json={'series':'1','next_number':1,'expected_revision':None,'confirm_unused':True})
-    assert admin.get(f'/api/companies/{company["id"]}/fiscal-defaults').json()=={'last_simples_percent':None}
+    assert admin.get(f'/api/companies/{company["id"]}/fiscal-defaults').json()=={'last_simples_percent':None,'last_percentages':None}
     n=note(admin,row)
     missing=emit(admin,n,simples_percent=None);assert missing.status_code==422 and 'percentual' in missing.json()['detail']
     assert emit(admin,n,simples_percent='101').status_code==422
     n=next(x for x in notes(admin) if x['id']==n['id'])
     assert emit(admin,n,simples_percent='7.12').status_code==200
-    assert admin.get(f'/api/companies/{company["id"]}/fiscal-defaults').json()=={'last_simples_percent':'7.12'}
+    assert admin.get(f'/api/companies/{company["id"]}/fiscal-defaults').json()=={'last_simples_percent':'7.12','last_percentages':None}
 
-def test_non_simples_profile_refuses_percent(admin,company,row):
+def test_non_simples_profile_sends_federal_state_municipal_percentages(admin,company,row):
+    # 0.14.0, rule E0713: a non-optant (Lucro Presumido/Real) cannot send indTotTrib nor pTotTribSN.
     profile={**PROFILE,'op_simp_nac':'1','reg_ap_trib_sn':None,'totals_mode':'not_informed'}
-    assert set_profile(admin,company,profile).status_code==200
+    r=set_profile(admin,company,profile);assert r.status_code==200 and r.json()['config']['perfil_fiscal']['totals_mode']=='percentages'
     admin.put(f'/api/companies/{company["id"]}/dps-series',json={'series':'1','next_number':1,'expected_revision':None,'confirm_unused':True})
     n=note(admin,row)
-    assert emit(admin,n).status_code==422  # percentage sent for a non-SN company
+    assert emit(admin,n).status_code==422  # Simples percentage sent for a non-SN company
     n=next(x for x in notes(admin) if x['id']==n['id'])
-    r=emit(admin,n,simples_percent=None);assert r.status_code==200,r.text
+    r=emit(admin,n,simples_percent=None,tot_fed='13.45');assert r.status_code==422 and 'federais' in r.json()['detail']
+    n=next(x for x in notes(admin) if x['id']==n['id'])
+    r=emit(admin,n,simples_percent=None,tot_fed='13.45',tot_est='0',tot_mun='2.00');assert r.status_code==200,r.text
     xml=etree.fromstring(admin.get(f'/api/dps/{r.json()["id"]}/xml').content)
-    assert xml.find('.//{*}indTotTrib').text=='0'
+    assert xml.find('.//{*}indTotTrib') is None and xml.find('.//{*}pTotTribSN') is None
+    assert [xml.find('.//{*}pTotTrib/{*}'+t).text for t in ('pTotTribFed','pTotTribEst','pTotTribMun')]==['13.45','0.00','2.00']
+    assert xml.find('.//{*}regApTribSN') is None and xml.find('.//{*}opSimpNac').text=='1'
+    assert admin.get(f'/api/companies/{company["id"]}/fiscal-defaults').json()['last_percentages']=={'fed':'13.45','est':'0.00','mun':'2.00'}
+
+def test_mei_keeps_not_informed(admin,company,row):
+    profile={**PROFILE,'op_simp_nac':'2','reg_ap_trib_sn':None}
+    r=set_profile(admin,company,profile);assert r.status_code==200 and r.json()['config']['perfil_fiscal']['totals_mode']=='not_informed'
 
 ADDRESS={'cep':'88010-001','logradouro':'Rua Fictícia de Testes','numero':'100','complemento':'Sala 2','bairro':'Centro','municipio_ibge':'4205704'}
 PJ='11222333000181'  # fictitious valid CNPJ used as customer

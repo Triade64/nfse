@@ -85,3 +85,11 @@ def test_operator_only_imports_for_authorized_companies(admin,company):
     row=send(admin,xlsx([person()])).json()['rows'][0]
     assert row['action']=='Com erro' and 'não autorizada' in row['errors'][0]
     admin.post('/api/logout');assert send(admin,xlsx([person()])).status_code==401
+
+def test_municipality_search_by_name(admin):
+    found=admin.get('/api/municipios',params={'q':'garop'}).json()
+    assert found[0]=={'codigo':'4205704','nome':'Garopaba','uf':'SC'}
+    assert any(m['nome']=='São Paulo' and m['uf']=='SP' for m in admin.get('/api/municipios',params={'q':'sao paulo'}).json())  # accents ignored
+    assert admin.get('/api/municipios',params={'codigo':'4205704'}).json()[0]['nome']=='Garopaba'
+    assert admin.get('/api/municipios',params={'q':'g'}).json()==[]
+    admin.post('/api/logout');assert admin.get('/api/municipios',params={'q':'garop'}).status_code==401

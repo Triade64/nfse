@@ -157,7 +157,7 @@ async def lifespan(app):
     yield
     stop.set(); thread.join(timeout=3)
 
-app=FastAPI(title='Tríade NFS-e • preparação local',version='0.13.1',lifespan=lifespan)
+app=FastAPI(title='Tríade NFS-e • preparação local',version='0.14.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=allowed_hosts())
 
 @app.middleware('http')
@@ -452,17 +452,23 @@ class EmitInput(BaseModel):
     expected_raw:dict[str,str]
     confirm:Literal[True]
     simples_percent:Decimal|None=Field(default=None,ge=0,le=100,decimal_places=2)
+    tot_fed:Decimal|None=Field(default=None,ge=0,le=100,decimal_places=2)
+    tot_est:Decimal|None=Field(default=None,ge=0,le=100,decimal_places=2)
+    tot_mun:Decimal|None=Field(default=None,ge=0,le=100,decimal_places=2)
     confirm_production:bool=False
 
 @app.get('/api/companies/{id}/fiscal-defaults')
 def fiscal_defaults(id:int,u=Depends(current_user),db=Depends(db_session)):
-    """Last Simples percentage actually used by this company, to prefill the next emission."""
+    """Last tax-estimate percentages actually used by this company, to prefill the next emission."""
     role(u,['admin']);get_or_404(db,Company,id);allowed_company(db,u,id)
-    last=None
+    last=None;last_pct=None
     for xml in db.scalars(select(DPS.xml).where(DPS.company_id==id,DPS.xml.is_not(None)).order_by(DPS.id.desc()).limit(20)):
         match=re.search(r'<pTotTribSN>([0-9.]+)</pTotTribSN>',xml)
-        if match:last=match.group(1);break
-    return {'last_simples_percent':last}
+        if match and last is None:last=match.group(1)
+        found=[re.search(rf'<{t}>([0-9.]+)</{t}>',xml) for t in ('pTotTribFed','pTotTribEst','pTotTribMun')]
+        if all(found) and last_pct is None:last_pct={'fed':found[0].group(1),'est':found[1].group(1),'mun':found[2].group(1)}
+        if last is not None and last_pct is not None:break
+    return {'last_simples_percent':last,'last_percentages':last_pct}
 
 @app.post('/api/notes/{id}/emit')
 def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_session)):
@@ -484,7 +490,7 @@ def emit_note(id:int,data:EmitInput,u=Depends(current_user),db=Depends(db_sessio
         validate_batch(db,u,b);db.flush()
     try:
         fiscal=FiscalProfile(**profile)
-        options=ReserveOptions(**fiscal.choices(data.simples_percent),series=fiscal.series,revision=b.revision,expected_raw=d.raw,own_company_cnpj=c.cnpj,confirm_reserve=True,confirm_scope=True)
+        options=ReserveOptions(**fiscal.choices(data.simples_percent,(data.tot_fed,data.tot_est,data.tot_mun)),series=fiscal.series,revision=b.revision,expected_raw=d.raw,own_company_cnpj=c.cnpj,confirm_reserve=True,confirm_scope=True)
     except ValueError as exc:
         message=exc.errors()[0]['msg'] if hasattr(exc,'errors') else str(exc)
         raise HTTPException(422,message.removeprefix('Value error, ')+' Revise o perfil fiscal da empresa se necessário.') from None
@@ -751,6 +757,25 @@ def edit_customer(id:int,data:CustomerInput,u=Depends(current_user),db=Depends(d
     c=get_or_404(db,Customer,id);allowed_company(db,u,c.company_id);return save_customer(data,db,u,c)
 
 # ---- 0.12.0: customer import from a spreadsheet (template -> preview -> confirmed import)
+@app.get('/api/municipios')
+def municipios(q:str='',codigo:str='',u=Depends(current_user)):
+    """0.14.0: municipality search by name (official IBGE table, Anexo A), so forms never ask for the 7-digit code."""
+    import unicodedata
+    from .danfse import _localidades
+    table=_localidades()['municipios']
+    if codigo:
+        found=table.get(re.sub(r'\D','',codigo)[:7])
+        return [{'codigo':codigo,'nome':found[0],'uf':found[1]}] if found else []
+    def plain(text):return ''.join(c for c in unicodedata.normalize('NFD',text.casefold()) if unicodedata.category(c)!='Mn')
+    term=plain(q.strip())[:60]
+    if len(term)<2:return []
+    starts=[];contains=[]
+    for code,(name,uf) in table.items():
+        n=plain(name)
+        if n.startswith(term):starts.append((name,uf,code))
+        elif term in n:contains.append((name,uf,code))
+    return [{'codigo':c,'nome':n,'uf':uf} for n,uf,c in (sorted(starts)+sorted(contains))[:20]]
+
 @app.get('/api/customers/template.xlsx')
 def customers_template(u=Depends(current_user)):
     role(u,['admin','operator','approver'])
